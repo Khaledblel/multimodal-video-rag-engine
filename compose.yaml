@@ -30,5 +30,18 @@ services:
       retries: 5
       start_period: 20s
 
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    init: true
+    command: ["sleep", "infinity"]
+    environment:
+      DATA_DIR: /data
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ./data:/data
+
 volumes:
   qdrant_storage:

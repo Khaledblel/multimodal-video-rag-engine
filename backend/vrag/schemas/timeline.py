@@ -55,7 +55,7 @@ class Segment(_Span):
 
 class Frame(_Model):
     index: int = Field(ge=0)
-    t: float = Field(ge=0)
+    t: float = Field(ge=0)  # actual PTS of the first frame in each whole second
     path: str  # relative to the video's artifact directory
 
 

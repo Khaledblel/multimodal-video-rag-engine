@@ -30,7 +30,7 @@ EOF
 fi
 
 [ -f .env ] || cp .env.example .env
-install -d -m 0775 -o 1000 -g 1000 data
+install -d -m 0775 -o 1000 -g 1000 data data/media data/artifacts
 
 docker compose up -d --build
 docker compose ps
