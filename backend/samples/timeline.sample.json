@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "video": {
+    "video_id": "sample-0001",
+    "source_name": "sample.mp4",
+    "duration_s": 10.0,
+    "width": 640,
+    "height": 360,
+    "fps": 25.0,
+    "is_vfr": false,
+    "video_start_s": 0.0,
+    "audio_start_s": 0.0,
+    "has_audio": true
+  },
+  "stages": {
+    "probe": {"version": "1", "finished_at": "2026-10-27T12:00:00Z"}
+  },
+  "segments": [
+    {
+      "id": 0,
+      "start": 0.6,
+      "end": 2.4,
+      "text": "Hello and welcome to the demo.",
+      "words": [
+        {"start": 0.6, "end": 0.95, "text": "Hello", "prob": 0.98},
+        {"start": 0.95, "end": 1.1, "text": "and", "prob": 0.97},
+        {"start": 1.1, "end": 1.6, "text": "welcome", "prob": 0.99},
+        {"start": 1.6, "end": 1.75, "text": "to", "prob": 0.96},
+        {"start": 1.75, "end": 1.9, "text": "the", "prob": 0.97},
+        {"start": 1.9, "end": 2.4, "text": "demo.", "prob": 0.95}
+      ]
+    },
+    {
+      "id": 1,
+      "start": 4.0,
+      "end": 6.1,
+      "text": "Here is the second sentence.",
+      "words": [
+        {"start": 4.0, "end": 4.3, "text": "Here", "prob": 0.96},
+        {"start": 4.3, "end": 4.45, "text": "is", "prob": 0.98},
+        {"start": 4.45, "end": 4.6, "text": "the", "prob": 0.97},
+        {"start": 4.6, "end": 5.2, "text": "second", "prob": 0.99},
+        {"start": 5.2, "end": 6.1, "text": "sentence.", "prob": 0.94}
+      ]
+    }
+  ],
+  "frames": [
+    {"index": 0, "t": 0.0, "path": "frames/000000.jpg"},
+    {"index": 1, "t": 1.0, "path": "frames/000001.jpg"},
+    {"index": 2, "t": 2.0, "path": "frames/000002.jpg"},
+    {"index": 3, "t": 3.0, "path": "frames/000003.jpg"},
+    {"index": 4, "t": 4.0, "path": "frames/000004.jpg"},
+    {"index": 5, "t": 5.0, "path": "frames/000005.jpg"},
+    {"index": 6, "t": 6.0, "path": "frames/000006.jpg"},
+    {"index": 7, "t": 7.0, "path": "frames/000007.jpg"},
+    {"index": 8, "t": 8.0, "path": "frames/000008.jpg"},
+    {"index": 9, "t": 9.0, "path": "frames/000009.jpg"}
+  ],
+  "speakers": []
+}
