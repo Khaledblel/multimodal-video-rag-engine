@@ -18,11 +18,13 @@ services:
       QDRANT_URL: http://qdrant:6333
       DATA_DIR: /data
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      TEXT_EMBED_MODEL: ${TEXT_EMBED_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
     ports:
       # Loopback by default
       - "${API_BIND:-127.0.0.1}:${API_PORT:-8000}:8000"
     volumes:
       - ./data:/data
+      - models:/models
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
       interval: 10s
@@ -37,7 +39,10 @@ services:
     restart: unless-stopped
     init: true
     command: ["sleep", "infinity"]
+    depends_on:
+      - qdrant
     environment:
+      QDRANT_URL: http://qdrant:6333
       DATA_DIR: /data
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       ASR_ENABLED: ${ASR_ENABLED:-true}
@@ -45,6 +50,8 @@ services:
       ASR_DEVICE: ${ASR_DEVICE:-cpu}
       ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-int8}
       ASR_LANGUAGE: ${ASR_LANGUAGE:-}
+      TEXT_EMBED_MODEL: ${TEXT_EMBED_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      INDEX_ENABLED: ${INDEX_ENABLED:-true}
     volumes:
       - ./data:/data
       - models:/models

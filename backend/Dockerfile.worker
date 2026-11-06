@@ -3,7 +3,8 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    HF_HOME=/models/huggingface
+    HF_HOME=/models/huggingface \
+    FASTEMBED_CACHE_PATH=/models/fastembed
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg \
@@ -20,6 +21,7 @@ RUN pip install -r requirements.worker.txt
 
 COPY vrag ./vrag
 COPY samples ./samples
+COPY eval ./eval
 
 USER app
 CMD ["sleep", "infinity"]

@@ -1,4 +1,4 @@
-"""Ingest one video into data/artifacts/<video_id>/: timeline.json (with the transcript), audio.wav and frames/.
+"""Ingest one video into data/artifacts/<video_id>/ (timeline.json, audio.wav, frames/) and the search index.
 
 Usage: python -m vrag.ingest PATH [--force]
 """
@@ -14,14 +14,14 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from vrag import asr, media
+from vrag import asr, index, media
 from vrag.artifacts import artifact_dir, load_timeline, save_timeline
 from vrag.config import get_settings
 from vrag.schemas.timeline import StageRecord, Timeline
 
 log = logging.getLogger("vrag.ingest")
 
-STAGE_VERSIONS = {"probe": "1", "audio": "1", "frames": "1", "transcript": "1"}
+STAGE_VERSIONS = {"probe": "1", "audio": "1", "frames": "1", "transcript": "1", "index": "1"}
 
 
 def _sha256(path: Path) -> str:
@@ -104,6 +104,24 @@ def ingest(src: Path, force: bool = False) -> Timeline:
             audio_path, settings.asr_model, settings.asr_device, settings.asr_compute_type, language
         )
         _record(timeline, "transcript", **asr_params)
+        save_timeline(timeline, timeline_path)
+
+    if not settings.index_enabled:
+        log.info("index: disabled")
+    else:
+        windows = index.build_windows(timeline.segments)
+        index_params = {"model": settings.text_embed_model, "collection": index.collection_name()}
+        if (
+            _is_done(timeline, "index", **index_params)
+            and timeline.windows == windows
+            and index.count(video_id) == len(windows)
+        ):
+            log.info("index: up to date")
+        else:
+            log.info("index: %d windows into %s", len(windows), index_params["collection"])
+            index.replace(timeline.video, windows)
+            timeline.windows = windows
+            _record(timeline, "index", **index_params)
 
     save_timeline(timeline, timeline_path)
     return timeline
@@ -126,7 +144,8 @@ def main() -> int:
     print(
         f"video_id={video.video_id} duration={video.duration_s:.2f}s "
         f"frames={len(timeline.frames)} audio={'yes' if video.has_audio else 'no'} "
-        f"segments={len(timeline.segments)} language={timeline.language or '-'}"
+        f"segments={len(timeline.segments)} language={timeline.language or '-'} "
+        f"windows={len(timeline.windows)}"
     )
     print(f"artifacts: {artifact_dir(video.video_id)}")
     return 0

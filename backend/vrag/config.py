@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     asr_compute_type: str = "int8"
     asr_language: str = ""
 
+    text_embed_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    index_enabled: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:

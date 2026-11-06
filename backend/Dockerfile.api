@@ -2,11 +2,13 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/models/huggingface \
+    FASTEMBED_CACHE_PATH=/models/fastembed
 
 RUN useradd --uid 1000 --create-home app \
-    && mkdir /data \
-    && chown app:app /data
+    && mkdir /data /models \
+    && chown app:app /data /models
 
 WORKDIR /app
 

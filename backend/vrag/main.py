@@ -1,12 +1,14 @@
 import logging
 import tempfile
+from typing import Annotated
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
 
-from vrag import __version__
+from vrag import __version__, index
 from vrag.config import get_settings
+from vrag.schemas.search import SearchResponse
 from vrag.schemas.timeline import SCHEMA_VERSION
 
 settings = get_settings()
@@ -50,3 +52,12 @@ async def health() -> JSONResponse:
         },
         status_code=200 if ok else 503,
     )
+
+
+@app.get("/search")
+def search(
+    q: Annotated[str, Query(min_length=1, max_length=500)],
+    video_id: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=50)] = 5,
+) -> SearchResponse:
+    return SearchResponse(query=q, collection=index.collection_name(), hits=index.search(q, limit, video_id))

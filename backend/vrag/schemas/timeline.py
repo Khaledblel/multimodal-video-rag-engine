@@ -53,6 +53,11 @@ class Segment(_Span):
     speaker_id: str | None = None
 
 
+class Window(_Span):
+    id: int = Field(ge=0)
+    text: str
+
+
 class Frame(_Model):
     index: int = Field(ge=0)
     t: float = Field(ge=0)  # actual PTS of the first frame in each whole second
@@ -76,5 +81,6 @@ class Timeline(_Model):
     stages: dict[str, StageRecord] = Field(default_factory=dict)
     language: str | None = None
     segments: list[Segment] = Field(default_factory=list)
+    windows: list[Window] = Field(default_factory=list)
     frames: list[Frame] = Field(default_factory=list)
     speakers: list[Speaker] = Field(default_factory=list)
