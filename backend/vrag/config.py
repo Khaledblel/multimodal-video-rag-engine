@@ -11,6 +11,12 @@ class Settings(BaseSettings):
     data_dir: Path = Path("/data")
     log_level: str = "INFO"
 
+    asr_enabled: bool = True
+    asr_model: str = "small"
+    asr_device: str = "cpu"
+    asr_compute_type: str = "int8"
+    asr_language: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

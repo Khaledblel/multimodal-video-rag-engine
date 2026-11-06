@@ -1,5 +1,5 @@
 #cloud-config
-# Paste into the droplet's "User data" box after replacing the repo URL below.
+# Paste into the droplet's "User data" box. Cloning needs the repo below to be public.
 package_update: true
 packages:
   - git

@@ -1,4 +1,4 @@
-"""Timestamp self-check: build a clip with flashes and beeps at known times, ingest it, verify alignment.
+"""Self-check: ingest a clip with flashes and beeps at known times, verify alignment and that nothing is transcribed.
 
 Usage: python -m vrag.tools.sync_check
 """
@@ -44,6 +44,7 @@ def make_clip(path: Path) -> None:
             "-map", "0:v", "-map", "1:a",
             "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
             "-c:a", "pcm_s16le",
+            "-fflags", "+bitexact",
             str(path),
         ],
         check=True,
@@ -126,6 +127,11 @@ def main() -> int:
             len(onsets) == len(EVENT_TIMES)
             and all(abs(o - e) < 0.05 for o, e in zip(onsets, EVENT_TIMES)),
             f"measured {[round(o, 3) for o in onsets]} s",
+        ),
+        _report(
+            "no speech in beeps",
+            not timeline.segments,
+            f"segments {[s.text for s in timeline.segments]}",
         ),
     ]
     return 0 if all(results) else 1

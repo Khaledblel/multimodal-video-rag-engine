@@ -15,6 +15,7 @@
   "stages": {
     "probe": {"version": "1", "finished_at": "2026-10-27T12:00:00Z"}
   },
+  "language": "en",
   "segments": [
     {
       "id": 0,

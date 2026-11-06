@@ -1,4 +1,4 @@
-"""Ingest one video into data/artifacts/<video_id>/: timeline.json, audio.wav and frames/.
+"""Ingest one video into data/artifacts/<video_id>/: timeline.json (with the transcript), audio.wav and frames/.
 
 Usage: python -m vrag.ingest PATH [--force]
 """
@@ -14,14 +14,14 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from vrag import media
+from vrag import asr, media
 from vrag.artifacts import artifact_dir, load_timeline, save_timeline
 from vrag.config import get_settings
 from vrag.schemas.timeline import StageRecord, Timeline
 
 log = logging.getLogger("vrag.ingest")
 
-STAGE_VERSIONS = {"probe": "1", "audio": "1", "frames": "1"}
+STAGE_VERSIONS = {"probe": "1", "audio": "1", "frames": "1", "transcript": "1"}
 
 
 def _sha256(path: Path) -> str:
@@ -37,9 +37,13 @@ def _record(timeline: Timeline, stage: str, **params: object) -> None:
     )
 
 
-def _is_done(timeline: Timeline, stage: str) -> bool:
+def _is_done(timeline: Timeline, stage: str, **params: object) -> bool:
     record = timeline.stages.get(stage)
-    return record is not None and record.version == STAGE_VERSIONS[stage]
+    return (
+        record is not None
+        and record.version == STAGE_VERSIONS[stage]
+        and all(record.params.get(key) == value for key, value in params.items())
+    )
 
 
 def ingest(src: Path, force: bool = False) -> Timeline:
@@ -78,6 +82,28 @@ def ingest(src: Path, force: bool = False) -> Timeline:
         log.info("frames: extracting")
         timeline.frames = media.extract_frames(src, probe.video_index, frames_dir)
         _record(timeline, "frames", rule="first frame of each whole second")
+        save_timeline(timeline, timeline_path)
+
+    settings = get_settings()
+    language = settings.asr_language or None
+    asr_params = {"model": settings.asr_model, "compute_type": settings.asr_compute_type, "language": language}
+    if probe.audio_index is None:
+        log.info("transcript: no audio stream")
+        timeline.stages.pop("transcript", None)
+        timeline.language, timeline.segments = None, []
+    elif not settings.asr_enabled:
+        log.info("transcript: disabled")
+    elif _is_done(timeline, "transcript", **asr_params):
+        log.info("transcript: up to date")
+    else:
+        log.info(
+            "transcript: faster-whisper %s, %s on %s",
+            settings.asr_model, settings.asr_compute_type, settings.asr_device,
+        )
+        timeline.language, timeline.segments = asr.transcribe(
+            audio_path, settings.asr_model, settings.asr_device, settings.asr_compute_type, language
+        )
+        _record(timeline, "transcript", **asr_params)
 
     save_timeline(timeline, timeline_path)
     return timeline
@@ -99,7 +125,8 @@ def main() -> int:
     video = timeline.video
     print(
         f"video_id={video.video_id} duration={video.duration_s:.2f}s "
-        f"frames={len(timeline.frames)} audio={'yes' if video.has_audio else 'no'}"
+        f"frames={len(timeline.frames)} audio={'yes' if video.has_audio else 'no'} "
+        f"segments={len(timeline.segments)} language={timeline.language or '-'}"
     )
     print(f"artifacts: {artifact_dir(video.video_id)}")
     return 0

@@ -76,13 +76,17 @@ def probe(src: Path, video_id: str, sha256: str) -> ProbeResult:
     audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
 
     avg, base = _rate(video.get("avg_frame_rate")), _rate(video.get("r_frame_rate"))
+    width, height = video.get("width"), video.get("height")
+    rotation = next((d["rotation"] for d in video.get("side_data_list", []) if "rotation" in d), 0)
+    if abs(rotation) % 180 == 90:
+        width, height = height, width
     info = VideoInfo(
         video_id=video_id,
         source_name=src.name,
         sha256=sha256,
         duration_s=_num(data.get("format", {}).get("duration")) or _num(video.get("duration")) or 0.0,
-        width=video.get("width"),
-        height=video.get("height"),
+        width=width,
+        height=height,
         fps=avg or base,
         is_vfr=abs(avg - base) / base > 0.01 if avg and base else None,
         video_start_s=_num(video.get("start_time")),

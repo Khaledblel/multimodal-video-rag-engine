@@ -40,8 +40,15 @@ services:
     environment:
       DATA_DIR: /data
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ASR_ENABLED: ${ASR_ENABLED:-true}
+      ASR_MODEL: ${ASR_MODEL:-small}
+      ASR_DEVICE: ${ASR_DEVICE:-cpu}
+      ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-int8}
+      ASR_LANGUAGE: ${ASR_LANGUAGE:-}
     volumes:
       - ./data:/data
+      - models:/models
 
 volumes:
   qdrant_storage:
+  models:

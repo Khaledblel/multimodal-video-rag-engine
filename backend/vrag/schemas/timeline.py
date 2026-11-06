@@ -74,6 +74,7 @@ class Timeline(_Model):
     schema_version: Literal[1] = SCHEMA_VERSION
     video: VideoInfo
     stages: dict[str, StageRecord] = Field(default_factory=dict)
+    language: str | None = None
     segments: list[Segment] = Field(default_factory=list)
     frames: list[Frame] = Field(default_factory=list)
     speakers: list[Speaker] = Field(default_factory=list)

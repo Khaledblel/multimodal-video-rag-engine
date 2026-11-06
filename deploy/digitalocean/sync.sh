@@ -7,7 +7,7 @@ TARGET="${1:?usage: sync.sh user@host}"
 cd "$(dirname "$0")/../.."
 
 rsync -az --delete \
-  --exclude /.git --exclude /data --exclude /.env \
+  --exclude /.git --exclude /data --exclude /.env --exclude /misc \
   --exclude node_modules --exclude .next --exclude __pycache__ \
   ./ "$TARGET:/opt/vrag/"
 ssh "$TARGET" "bash /opt/vrag/deploy/digitalocean/bootstrap.sh"
