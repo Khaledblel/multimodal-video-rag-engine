@@ -2,5 +2,6 @@ pydantic>=2.8
 pydantic-settings>=2.4
 Pillow>=10.4
 faster-whisper>=1.2
+numpy>=1.26
 qdrant-client>=1.20
 fastembed>=0.9

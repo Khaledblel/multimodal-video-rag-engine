@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import wave
 from pathlib import Path
 
+import numpy as np
 from faster_whisper import WhisperModel
 from faster_whisper.transcribe import Word as WhisperWord
 
@@ -19,12 +21,18 @@ def _word(word: WhisperWord) -> Word:
     )
 
 
+def _load(path: Path) -> np.ndarray:
+    with wave.open(str(path)) as wav:
+        pcm = wav.readframes(wav.getnframes())
+    return np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+
+
 def transcribe(
     audio: Path, model_name: str, device: str, compute_type: str, language: str | None
 ) -> tuple[str | None, list[Segment]]:
     model = WhisperModel(model_name, device=device, compute_type=compute_type)
     raw, info = model.transcribe(
-        str(audio),
+        _load(audio),
         language=language,
         log_progress=True,
         vad_filter=True,
