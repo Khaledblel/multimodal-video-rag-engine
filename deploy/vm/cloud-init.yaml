@@ -1,9 +1,9 @@
 #cloud-config
-# Paste into the droplet's "User data" box. Cloning needs the repo below to be public.
+# Cloning needs the repo below to be public.
 package_update: true
 packages:
   - git
 runcmd:
   - export HOME=/root
   - git clone --depth 1 https://github.com/Khaledblel/multimodal-video-rag-engine.git /opt/vrag
-  - bash /opt/vrag/deploy/digitalocean/bootstrap.sh
+  - bash /opt/vrag/deploy/vm/bootstrap.sh

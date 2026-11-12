@@ -16,8 +16,9 @@ RUN useradd --uid 1000 --create-home app \
 
 WORKDIR /app
 
-COPY requirements.worker.txt .
-RUN pip install -r requirements.worker.txt
+# constraints.worker.txt is the pip freeze of the last verified build.
+COPY requirements.worker.txt constraints.worker.txt ./
+RUN pip install -r requirements.worker.txt -c constraints.worker.txt
 
 COPY vrag ./vrag
 COPY samples ./samples

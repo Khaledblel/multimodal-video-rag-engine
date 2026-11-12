@@ -56,3 +56,18 @@ Each hit gives the video, the window's start and end in seconds, its text and a 
 ```
 
 `docker compose exec worker python -m vrag.evaluate` prints Recall@1/5/10 and MRR per category and saves them in `data/eval/`. A hit counts when it overlaps a target, give or take `tolerance_s`. The file is built into the worker image, so rebuild after editing it (`docker compose up -d --build`) or pass another path, such as one under `/data`.
+
+### Baseline results
+
+The first measurement, with transcript search only (November 2026):
+
+| Category | Queries | Recall@1 | Recall@5 | Recall@10 | MRR |
+|---|---|---|---|---|---|
+| speech | 20 | 0.650 | 0.800 | 0.900 | 0.727 |
+
+- **Data:** 5 clips, 17 minutes in total, with 20 labeled speech queries. Each query is searched across every indexed clip.
+- **Setup:** the defaults: faster-whisper `small` transcripts (int8, CPU), windows of up to 20 seconds, `sentence-transformers/all-MiniLM-L6-v2` embeddings (384 dimensions, cosine similarity) and a tolerance of 2 seconds.
+- **Reading:** the right moment was the top hit for 13 of the 20 queries, in the top 5 for 16 and in the top 10 for 18. Two queries had no correct hit in the top 10.
+- **Limits:** this is a single run on a small set. Each query is worth 0.05 of recall, so only large differences between setups are meaningful, and only speech queries are covered so far.
+
+This is good enough to build on for now. MiniLM is a small, English-only model, so if retrieval quality becomes the limit, the next options are a stronger embedding model such as [Qwen3-Embedding-0.6B](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B), a re-ranker over the top hits, or both.

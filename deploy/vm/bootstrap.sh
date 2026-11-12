@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Idempotent: installs Docker if missing, then builds and starts the stack. Run as root on the droplet.
+# Idempotent: installs Docker if missing, then builds and starts the stack.
 set -euo pipefail
+
+# The steps below need root, so a non-root user gets the script re-run under sudo.
+[ "$(id -u)" -eq 0 ] || exec sudo bash "$0" "$@"
 
 export HOME="${HOME:-/root}"
 export DEBIAN_FRONTEND=noninteractive
