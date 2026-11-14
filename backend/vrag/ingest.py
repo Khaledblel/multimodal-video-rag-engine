@@ -8,10 +8,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import logging
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 from pydantic import ValidationError
 
 from vrag import asr, index, media
@@ -21,7 +23,14 @@ from vrag.schemas.timeline import StageRecord, Timeline
 
 log = logging.getLogger("vrag.ingest")
 
-STAGE_VERSIONS = {"probe": "1", "audio": "1", "frames": "1", "transcript": "1", "index": "1"}
+STAGE_VERSIONS = {
+    "probe": "1",
+    "audio": "1",
+    "frames": "1",
+    "transcript": "1",
+    "frame_vectors": "1",
+    "index": "1",
+}
 
 
 def _sha256(path: Path) -> str:
@@ -82,6 +91,7 @@ def ingest(src: Path, force: bool = False) -> Timeline:
         log.info("frames: extracting")
         timeline.frames = media.extract_frames(src, probe.video_index, frames_dir)
         _record(timeline, "frames", rule="first frame of each whole second")
+        timeline.stages.pop("frame_vectors", None)  # vectors of the previous frames no longer apply
         save_timeline(timeline, timeline_path)
 
     settings = get_settings()
@@ -106,10 +116,43 @@ def ingest(src: Path, force: bool = False) -> Timeline:
         _record(timeline, "transcript", **asr_params)
         save_timeline(timeline, timeline_path)
 
+    # One vector per frame, kept on disk so that re-indexing never has to embed the frames again.
+    frame_vectors = None
+    if not settings.frame_embed_enabled:
+        log.info("frame vectors: disabled")
+    else:
+        vectors_path = out / "frame_vectors.npy"
+        frame_params = {"model": settings.frame_embed_model}
+        if _is_done(timeline, "frame_vectors", **frame_params) and vectors_path.exists():
+            frame_vectors = np.load(vectors_path)
+        if frame_vectors is not None and len(frame_vectors) == len(timeline.frames):
+            log.info("frame vectors: up to date")
+        else:
+            from vrag import vision  # imported here so that PyTorch loads only when frames are embedded
+
+            log.info(
+                "frame vectors: %d frames with %s on %s",
+                len(timeline.frames), settings.frame_embed_model, vision.device(),
+            )
+            frame_vectors = vision.embed_frames([out / frame.path for frame in timeline.frames])
+            if frame_vectors.shape[1] != settings.frame_embed_dim:
+                raise ValueError(
+                    f"{settings.frame_embed_model} gives {frame_vectors.shape[1]}-d vectors, "
+                    f"but FRAME_EMBED_DIM is {settings.frame_embed_dim}; set it to match"
+                )
+            frame_vectors = frame_vectors.astype(np.float16)
+            tmp = vectors_path.with_name("frame_vectors.tmp.npy")
+            np.save(tmp, frame_vectors)
+            os.replace(tmp, vectors_path)
+            _record(timeline, "frame_vectors", **frame_params)
+            save_timeline(timeline, timeline_path)
+
     if not settings.index_enabled:
         log.info("index: disabled")
     else:
-        windows = index.build_windows(timeline.segments)
+        # Stretches without speech have nothing to index but frames, so they get windows only with frame vectors.
+        duration = timeline.video.duration_s if frame_vectors is not None else None
+        windows = index.build_windows(timeline.segments, duration)
         index_params = {"model": settings.text_embed_model, "collection": index.collection_name()}
         if (
             _is_done(timeline, "index", **index_params)
@@ -119,7 +162,7 @@ def ingest(src: Path, force: bool = False) -> Timeline:
             log.info("index: up to date")
         else:
             log.info("index: %d windows into %s", len(windows), index_params["collection"])
-            index.replace(timeline.video, windows)
+            index.replace(timeline.video, windows, timeline.frames, frame_vectors)
             timeline.windows = windows
             _record(timeline, "index", **index_params)
 

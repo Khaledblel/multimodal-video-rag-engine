@@ -1,9 +1,9 @@
 import logging
 import tempfile
-from typing import Annotated
+from typing import Annotated, Literal
 
 import httpx
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from vrag import __version__, index
@@ -59,5 +59,13 @@ def search(
     q: Annotated[str, Query(min_length=1, max_length=500)],
     video_id: str | None = None,
     limit: Annotated[int, Query(ge=1, le=50)] = 5,
+    mode: Literal["fused", "text", "frame"] = "fused",
 ) -> SearchResponse:
-    return SearchResponse(query=q, collection=index.collection_name(), hits=index.search(q, limit, video_id))
+    if mode == "frame" and not settings.frame_embed_enabled:
+        raise HTTPException(status_code=400, detail="frame search is turned off (FRAME_EMBED_ENABLED=false)")
+    try:
+        hits = index.search(q, limit, video_id, mode)
+    except httpx.HTTPError as exc:
+        # Frame search embeds the query in the embedder service.
+        raise HTTPException(status_code=503, detail=f"embedder unavailable: {exc}") from exc
+    return SearchResponse(query=q, collection=index.collection_name(), mode=mode, hits=hits)

@@ -6,6 +6,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/models/huggingface \
     FASTEMBED_CACHE_PATH=/models/fastembed
 
+# faster-whisper on a GPU loads cuBLAS and cuDNN for CUDA 12 from the packages PyTorch installs.
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.12/site-packages/nvidia/cudnn/lib
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
@@ -16,7 +19,7 @@ RUN useradd --uid 1000 --create-home app \
 
 WORKDIR /app
 
-# constraints.worker.txt is the pip freeze of the last verified build.
+
 COPY requirements.worker.txt constraints.worker.txt ./
 RUN pip install -r requirements.worker.txt -c constraints.worker.txt
 

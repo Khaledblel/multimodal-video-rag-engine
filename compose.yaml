@@ -1,5 +1,9 @@
 name: vrag
 
+x-worker-build: &worker-build
+  context: ./backend
+  dockerfile: Dockerfile.worker
+
 services:
   qdrant:
     image: qdrant/qdrant:v1.20.0
@@ -14,11 +18,18 @@ services:
     restart: unless-stopped
     depends_on:
       - qdrant
+      - embedder
     environment:
       QDRANT_URL: http://qdrant:6333
+      EMBEDDER_URL: http://embedder:8001
       DATA_DIR: /data
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       TEXT_EMBED_MODEL: ${TEXT_EMBED_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      FRAME_EMBED_ENABLED: ${FRAME_EMBED_ENABLED:-true}
+      FRAME_EMBED_MODEL: ${FRAME_EMBED_MODEL:-google/siglip2-so400m-patch14-384}
+      FRAME_EMBED_DIM: ${FRAME_EMBED_DIM:-1152}
+      FUSION_TEXT_WEIGHT: ${FUSION_TEXT_WEIGHT:-1.0}
+      FUSION_FRAME_WEIGHT: ${FUSION_FRAME_WEIGHT:-1.0}
     ports:
       # Loopback by default
       - "${API_BIND:-127.0.0.1}:${API_PORT:-8000}:8000"
@@ -33,16 +44,16 @@ services:
       start_period: 20s
 
   worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.worker
+    build: *worker-build
     restart: unless-stopped
     init: true
     command: ["sleep", "infinity"]
     depends_on:
       - qdrant
+      - embedder
     environment:
       QDRANT_URL: http://qdrant:6333
+      EMBEDDER_URL: http://embedder:8001
       DATA_DIR: /data
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       ASR_ENABLED: ${ASR_ENABLED:-true}
@@ -52,9 +63,34 @@ services:
       ASR_LANGUAGE: ${ASR_LANGUAGE:-}
       TEXT_EMBED_MODEL: ${TEXT_EMBED_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
       INDEX_ENABLED: ${INDEX_ENABLED:-true}
+      FRAME_EMBED_ENABLED: ${FRAME_EMBED_ENABLED:-true}
+      FRAME_EMBED_MODEL: ${FRAME_EMBED_MODEL:-google/siglip2-so400m-patch14-384}
+      FRAME_EMBED_DIM: ${FRAME_EMBED_DIM:-1152}
+      EMBED_DEVICE: ${EMBED_DEVICE:-auto}
+      FUSION_TEXT_WEIGHT: ${FUSION_TEXT_WEIGHT:-1.0}
+      FUSION_FRAME_WEIGHT: ${FUSION_FRAME_WEIGHT:-1.0}
     volumes:
       - ./data:/data
       - models:/models
+
+  embedder:
+    build: *worker-build
+    restart: unless-stopped
+    init: true
+    command: ["uvicorn", "vrag.embedder:app", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      FRAME_EMBED_MODEL: ${FRAME_EMBED_MODEL:-google/siglip2-so400m-patch14-384}
+      FRAME_EMBED_DIM: ${FRAME_EMBED_DIM:-1152}
+      EMBED_DEVICE: ${EMBED_DEVICE:-auto}
+    volumes:
+      - models:/models
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
 
 volumes:
   qdrant_storage:

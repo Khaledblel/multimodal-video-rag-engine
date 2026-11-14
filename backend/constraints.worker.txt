@@ -41,3 +41,11 @@ tqdm==4.70.1
 typing-inspection==0.4.5
 typing_extensions==4.16.0
 urllib3==2.8.0
+annotated-doc==0.0.6
+fastapi==0.162.5
+opentelemetry-api==1.45.2
+starlette==1.10.0
+uvicorn==0.54.0
+torch==2.14.1+cu126 ; platform_machine == "x86_64"
+torch==2.14.1 ; platform_machine != "x86_64"
+transformers==5.23.0

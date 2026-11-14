@@ -20,6 +20,14 @@ class Settings(BaseSettings):
     text_embed_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     index_enabled: bool = True
 
+    frame_embed_enabled: bool = True
+    frame_embed_model: str = "google/siglip2-so400m-patch14-384"
+    frame_embed_dim: int = 1152
+    embed_device: str = "auto"
+    embedder_url: str = "http://embedder:8001"
+    fusion_text_weight: float = 1.0
+    fusion_frame_weight: float = 1.0
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -32,8 +32,22 @@ EOF
   apt_get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 fi
 
+plugin() {
+  docker "$1" version >/dev/null 2>&1 && return
+  apt_get update
+  apt_get install -y "$2" || apt_get install -y "$3"
+}
+plugin compose docker-compose-plugin docker-compose-v2
+plugin buildx docker-buildx-plugin docker-buildx
+
 [ -f .env ] || cp .env.example .env
+if nvidia-smi >/dev/null 2>&1 && ! grep -q '^COMPOSE_FILE=' .env; then
+  echo 'COMPOSE_FILE=compose.yaml:compose.gpu.yaml' >> .env
+fi
 install -d -m 0775 -o 1000 -g 1000 data data/media data/artifacts
 
 docker compose up -d --build
 docker compose ps
+if grep -q '^COMPOSE_FILE=.*compose\.gpu\.yaml' .env; then
+  docker compose exec -T worker python -m vrag.tools.gpu_check
+fi

@@ -1,4 +1,4 @@
-"""Retrieval eval: Recall@K and MRR of search hits against labeled time spans.
+"""Retrieval eval: Recall@K and MRR of search hits against labeled time spans, for each way of searching.
 
 Usage: python -m vrag.evaluate [QUERIES]   (default: eval/queries.json)
 """
@@ -19,6 +19,7 @@ from vrag.schemas.evalset import EvalSet, Target
 from vrag.schemas.search import Hit
 
 KS = (1, 5, 10)
+MODES = ("text", "frame", "fused")
 
 
 def _rank(hits: list[Hit], targets: list[Target], tolerance: float) -> int | None:
@@ -44,6 +45,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("queries", nargs="?", type=Path, default=Path("eval/queries.json"))
     args = parser.parse_args()
+    settings = get_settings()
 
     try:
         raw = args.queries.read_text()
@@ -58,41 +60,53 @@ def main() -> int:
         if index.count(video_id) == 0:
             print(f"warning: {video_id} has no indexed windows")
 
-    per_query = [
-        {
-            "id": query.id,
-            "category": query.category,
-            "rank": _rank(index.search(query.query, limit=max(KS)), query.targets, eval_set.tolerance_s),
-        }
-        for query in eval_set.queries
-    ]
-    groups: dict[str, list[int | None]] = {}
-    for row in per_query:
-        groups.setdefault(row["category"], []).append(row["rank"])
-    groups["all"] = [row["rank"] for row in per_query]
-    metrics = {name: {"n": len(ranks), **_metrics(ranks)} for name, ranks in groups.items()}
+    modes = MODES if settings.frame_embed_enabled else ("text",)
+    per_query = []
+    for query in eval_set.queries:
+        row = {"id": query.id, "category": query.category}
+        for mode in modes:
+            hits = index.search(query.query, limit=max(KS), mode=mode)
+            row[mode] = _rank(hits, query.targets, eval_set.tolerance_s)
+        per_query.append(row)
+
+    metrics: dict[str, dict[str, dict[str, float]]] = {}
+    for mode in modes:
+        groups: dict[str, list[int | None]] = {}
+        for row in per_query:
+            groups.setdefault(row["category"], []).append(row[mode])
+        groups["all"] = [row[mode] for row in per_query]
+        metrics[mode] = {name: {"n": len(ranks), **_metrics(ranks)} for name, ranks in groups.items()}
 
     columns = [f"R@{k}" for k in KS] + ["MRR"]
     print(f"{index.collection_name()}: {len(per_query)} queries, tolerance {eval_set.tolerance_s} s")
-    print(f"{'category':<16}{'n':>4}" + "".join(f"{column:>7}" for column in columns))
-    for name, row in metrics.items():
-        print(f"{name:<16}{row['n']:>4}" + "".join(f"{row[column]:>7.3f}" for column in columns))
-    misses = [row["id"] for row in per_query if row["rank"] is None]
-    if misses:
-        print(f"not in top {max(KS)}: {', '.join(misses)}")
+    print(f"{'mode':<7}{'category':<16}{'n':>4}" + "".join(f"{column:>7}" for column in columns))
+    for mode in modes:
+        for name, row in metrics[mode].items():
+            print(f"{mode:<7}{name:<16}{row['n']:>4}" + "".join(f"{row[column]:>7.3f}" for column in columns))
+    for mode in modes:
+        misses = [row["id"] for row in per_query if row[mode] is None]
+        if misses:
+            print(f"{mode}: not in top {max(KS)}: {', '.join(misses)}")
 
     finished = datetime.now(timezone.utc)
-    out = get_settings().data_dir / "eval" / f"{finished:%Y%m%dT%H%M%SZ}.json"
+    out = settings.data_dir / "eval" / f"{finished:%Y%m%dT%H%M%SZ}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     result = {
         "finished_at": finished.isoformat(),
         "queries_file": str(args.queries),
         "queries_sha256": hashlib.sha256(raw.encode()).hexdigest(),
         "collection": index.collection_name(),
-        "text_model": get_settings().text_embed_model,
+        "text_model": settings.text_embed_model,
+        "frame_model": settings.frame_embed_model if settings.frame_embed_enabled else None,
+        "fusion": {
+            "rrf_k": index.RRF_K,
+            "text_weight": settings.fusion_text_weight,
+            "frame_weight": settings.fusion_frame_weight,
+        },
         "window_max_s": index.WINDOW_MAX_S,
         "window_gap_s": index.WINDOW_GAP_S,
         "tolerance_s": eval_set.tolerance_s,
+        "modes": list(modes),
         "metrics": metrics,
         "per_query": per_query,
     }

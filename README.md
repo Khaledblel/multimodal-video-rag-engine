@@ -2,7 +2,7 @@
 
 Ask questions about your videos in natural language. Speech transcripts and video frames are aligned on a single timeline and indexed in a vector database, so a question returns the matching moments and an answer grounded in what was said and shown.
 
-> Early development: video ingestion (audio, 1 FPS frames and a transcript with word timestamps) and search over the transcripts exist so far. Frame search and answering are being added step by step.
+> Early development: video ingestion (audio, 1 FPS frames and a transcript with word timestamps) and search over what is said and what is shown exist so far. Answering is being added step by step.
 
 ## Quick start
 
@@ -16,6 +16,8 @@ curl localhost:8000/health
 
 Stop with `docker compose down`. To change the API port or log level, copy `.env.example` to `.env` and edit it.
 
+With an NVIDIA GPU and the NVIDIA Container Toolkit on the host, add `COMPOSE_FILE=compose.yaml:compose.gpu.yaml` to `.env` before starting, so the containers that run models can use the GPU. `docker compose exec worker python -m vrag.tools.gpu_check` confirms it. Without a GPU everything still runs, more slowly. The worker image includes PyTorch and is several GB.
+
 ## Ingest a video
 
 Put a video in `data/media/`, then run:
@@ -24,7 +26,7 @@ Put a video in `data/media/`, then run:
 docker compose exec worker python -m vrag.ingest /data/media/clip.mp4
 ```
 
-Output goes to `data/artifacts/<video_id>/`: `timeline.json` (metadata, frame list and transcript), `audio.wav` (16 kHz mono) and `frames/` (the first frame of every second). Finished stages are skipped on re-runs; pass `--force` to redo them.
+Output goes to `data/artifacts/<video_id>/`: `timeline.json` (metadata, frame list and transcript), `audio.wav` (16 kHz mono), `frames/` (the first frame of every second) and `frame_vectors.npy` (one embedding per frame). Finished stages are skipped on re-runs; pass `--force` to redo them.
 
 Speech is transcribed with word timestamps by [faster-whisper](https://github.com/SYSTRAN/faster-whisper), using the `small` model on the CPU by default; the model downloads on first use. The `ASR_*` settings in `.env` change the model, device, compute type or language (empty means auto-detect), and `ASR_ENABLED=false` skips transcription. To read a transcript: `docker compose exec worker python -m vrag.tools.show_transcript <video_id> --words`.
 
@@ -32,17 +34,32 @@ To check timestamp handling on a generated clip: `docker compose exec worker pyt
 
 ## Search
 
-Ingesting also indexes the transcript. It is grouped into windows of up to 20 seconds, embedded with `sentence-transformers/all-MiniLM-L6-v2` (English) through [fastembed](https://github.com/qdrant/fastembed), and stored in Qdrant as one point per window. `TEXT_EMBED_MODEL` picks another fastembed text model (each model gets its own collection; ingest the videos again to fill it), and `INDEX_ENABLED=false` skips indexing.
+Ingesting also indexes the video for search, in windows of up to 20 seconds that together cover the whole video:
+
+- **What is said:** each window's transcript is embedded with `sentence-transformers/all-MiniLM-L6-v2` (English) through [fastembed](https://github.com/qdrant/fastembed).
+- **What is shown:** each frame is embedded with [SigLIP 2](https://huggingface.co/google/siglip2-so400m-patch14-384). A window keeps the vectors of its frames, and a query matches it through its best frame.
+
+Both are stored in Qdrant as one point per window. A search runs both ways and fuses the two rankings.
 
 ```bash
 curl -G localhost:8000/search --data-urlencode 'q=when do they talk about the budget'
+curl -G localhost:8000/search --data-urlencode 'q=a red car at night' -d mode=frame
 ```
 
-Each hit gives the video, the window's start and end in seconds, its text and a similarity score. Add `video_id=...` to search one video, or `limit=...` for more than 5 hits.
+Each hit gives the video, the window's start and end in seconds, its text, a score, and its rank in the text search and in the frame search. Options: `mode=text` or `mode=frame` to search one way only, `video_id=...` to search one video, and `limit=...` for more than 5 hits.
+
+Settings in `.env`:
+
+- `TEXT_EMBED_MODEL` picks another fastembed text model.
+- `FRAME_EMBED_MODEL` and `FRAME_EMBED_DIM` pick another fixed-resolution SigLIP checkpoint and its vector size.
+- `FUSION_TEXT_WEIGHT` and `FUSION_FRAME_WEIGHT` weigh the two rankings in a fused search.
+- `FRAME_EMBED_ENABLED=false` turns frame search off, and `INDEX_ENABLED=false` skips indexing.
+
+Each combination of models gets its own collection; ingest the videos again to fill it.
 
 ## Evaluate retrieval
 
-`backend/eval/queries.json` holds labeled queries. Each has a `category` (`speech`, `visual`, `speaker_emotion`, `small_object` or `multimodal`; only speech is searchable so far) and one or more target time spans:
+`backend/eval/queries.json` holds labeled queries. Each has a `category` (`speech`, `visual`, `speaker_emotion`, `small_object` or `multimodal`; speech and visual queries are searchable so far) and one or more target time spans:
 
 ```json
 {
@@ -55,7 +72,7 @@ Each hit gives the video, the window's start and end in seconds, its text and a 
 }
 ```
 
-`docker compose exec worker python -m vrag.evaluate` prints Recall@1/5/10 and MRR per category and saves them in `data/eval/`. A hit counts when it overlaps a target, give or take `tolerance_s`. The file is built into the worker image, so rebuild after editing it (`docker compose up -d --build`) or pass another path, such as one under `/data`.
+`docker compose exec worker python -m vrag.evaluate` prints Recall@1/5/10 and MRR per category, once for each way of searching (`text`, `frame` and `fused`), and saves them in `data/eval/`. A hit counts when it overlaps a target, give or take `tolerance_s`. The file is built into the worker image, so rebuild after editing it (`docker compose up -d --build`) or pass another path, such as one under `/data`.
 
 ### Baseline results
 

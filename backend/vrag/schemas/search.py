@@ -11,9 +11,12 @@ class Hit(BaseModel):
     end: float
     text: str
     score: float
+    text_rank: int | None = None
+    frame_rank: int | None = None
 
 
 class SearchResponse(BaseModel):
     query: str
     collection: str
+    mode: str
     hits: list[Hit]
