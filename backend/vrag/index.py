@@ -9,9 +9,9 @@ from functools import lru_cache
 
 import httpx
 import numpy as np
-from fastembed import TextEmbedding
 from qdrant_client import QdrantClient, models
 
+from vrag import ollama
 from vrag.config import get_settings
 from vrag.schemas.search import Hit
 from vrag.schemas.timeline import Frame, Segment, VideoInfo, Window
@@ -23,6 +23,7 @@ UPSERT_BATCH = 16
 RRF_K = 60
 MODES = ("fused", "text", "frame")
 MULTIVECTOR_NUMBERS = 2**20
+QUERY_TASK = "Given a question about a video, retrieve the passages of its transcript that answer the question"
 
 
 def build_windows(segments: list[Segment], duration_s: float | None = None) -> list[Window]:
@@ -69,9 +70,20 @@ def span_frames(start: float, end: float, frames: list[Frame]) -> list[int]:
     return rows
 
 
-@lru_cache
-def _embedder() -> TextEmbedding:
-    return TextEmbedding(get_settings().text_embed_model)
+def query_text(query: str) -> str:
+    """A search query in the form the text embedding model expects."""
+    return f"Instruct: {QUERY_TASK}\nQuery:{query}"
+
+
+def _text_vectors(texts: list[str]) -> list[list[float]]:
+    vectors = ollama.embed(texts)
+    settings = get_settings()
+    if vectors and len(vectors[0]) != settings.text_embed_dim:
+        raise ValueError(
+            f"{settings.text_embed_model} gives {len(vectors[0])}-d vectors, "
+            f"but TEXT_EMBED_DIM is {settings.text_embed_dim}; set it to match"
+        )
+    return vectors
 
 
 @lru_cache
@@ -83,14 +95,10 @@ def _slug(model: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", model.lower()).strip("-")
 
 
-def _text_size() -> int:
-    return TextEmbedding.get_embedding_size(get_settings().text_embed_model)
-
-
 def collection_name() -> str:
     """One collection per set of embedding models, so vectors from different models never mix."""
     settings = get_settings()
-    name = f"windows_{_slug(settings.text_embed_model)}_{_text_size()}"
+    name = f"windows_{_slug(settings.text_embed_model)}_{settings.text_embed_dim}"
     if settings.frame_embed_enabled:
         name += f"_{_slug(settings.frame_embed_model)}_{settings.frame_embed_dim}"
     return name
@@ -113,7 +121,7 @@ def _ensure_collection(client: QdrantClient, name: str) -> None:
     if client.collection_exists(name):
         return
     settings = get_settings()
-    vectors = {"text": models.VectorParams(size=_text_size(), distance=models.Distance.COSINE)}
+    vectors = {"text": models.VectorParams(size=settings.text_embed_dim, distance=models.Distance.COSINE)}
     if settings.frame_embed_enabled:
         # One vector per frame; a query scores a window by its best-matching frame.
         vectors["frame"] = models.VectorParams(
@@ -134,13 +142,14 @@ def replace(
     frame_vectors: np.ndarray | None = None,
 ) -> None:
     """Replace a video's points. frame_vectors has one row per frame, in the order of frames."""
+    # The texts are embedded before anything is deleted, so a failure there leaves the old points in place.
+    spoken = [window for window in windows if window.text]
+    embedded = _text_vectors([window.text for window in spoken])
+    text_vectors = {window.id: vector for window, vector in zip(spoken, embedded)}
+
     client, name = _client(), collection_name()
     _ensure_collection(client, name)
     client.delete(name, points_selector=models.FilterSelector(filter=_video_filter(video.video_id)))
-
-    spoken = [window for window in windows if window.text]
-    embedded = _embedder().embed([window.text for window in spoken]) if spoken else []
-    text_vectors = {window.id: vector for window, vector in zip(spoken, embedded)}
     most_frames = (MULTIVECTOR_NUMBERS - 1) // frame_vectors.shape[1] if frame_vectors is not None else 0
     points = []
     for window in windows:
@@ -148,7 +157,7 @@ def replace(
         # Qdrant rejects an empty list of frame vectors, so a window without frames leaves that key out.
         vector: dict[str, list] = {}
         if window.id in text_vectors:
-            vector["text"] = text_vectors[window.id].tolist()
+            vector["text"] = text_vectors[window.id]
         if frame_vectors is not None and frames:
             rows = span_frames(window.start, window.end, frames)
             if len(rows) > most_frames:
@@ -197,7 +206,7 @@ def search(query: str, limit: int = 5, video_id: str | None = None, mode: str = 
 
     queries: dict[str, list] = {}
     if mode != "frame":
-        queries["text"] = next(iter(_embedder().query_embed(query))).tolist()
+        queries["text"] = _text_vectors([query_text(query)])[0]
     if mode != "text" and settings.frame_embed_enabled:
         queries["frame"] = [_frame_query(query)]
     fusing = len(queries) > 1

@@ -4,9 +4,12 @@ x-worker-build: &worker-build
   context: ./backend
   dockerfile: Dockerfile.worker
 
-# Settings of the VL model.
-x-vlm-env: &vlm-env
+# Settings of the models that Ollama runs: the text embedder and the VL model.
+x-ollama-env: &ollama-env
   OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+  TEXT_EMBED_MODEL: ${TEXT_EMBED_MODEL:-qwen3-embedding:0.6b}
+  TEXT_EMBED_DIM: ${TEXT_EMBED_DIM:-1024}
+  PLANNER_ENABLED: ${PLANNER_ENABLED:-true}
   VLM_ENABLED: ${VLM_ENABLED:-true}
   VLM_MODEL: ${VLM_MODEL:-qwen3-vl:8b-instruct}
   VLM_NUM_CTX: ${VLM_NUM_CTX:-16384}
@@ -21,7 +24,7 @@ services:
     volumes:
       - qdrant_storage:/qdrant/storage
 
-  # Runs the VL model. No published port: Ollama has no authentication.
+  # Runs the text embedder and the VL model. No published port: Ollama has no authentication.
   ollama:
     image: ollama/ollama:0.40.16
     restart: unless-stopped
@@ -44,12 +47,11 @@ services:
       - embedder
       - ollama
     environment:
-      <<: *vlm-env
+      <<: *ollama-env
       QDRANT_URL: http://qdrant:6333
       EMBEDDER_URL: http://embedder:8001
       DATA_DIR: /data
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      TEXT_EMBED_MODEL: ${TEXT_EMBED_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
       FRAME_EMBED_ENABLED: ${FRAME_EMBED_ENABLED:-true}
       FRAME_EMBED_MODEL: ${FRAME_EMBED_MODEL:-google/siglip2-so400m-patch14-384}
       FRAME_EMBED_DIM: ${FRAME_EMBED_DIM:-1152}
@@ -60,7 +62,6 @@ services:
       - "${API_BIND:-127.0.0.1}:${API_PORT:-8000}:8000"
     volumes:
       - ./data:/data
-      - models:/models
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
       interval: 10s
@@ -78,7 +79,7 @@ services:
       - embedder
       - ollama
     environment:
-      <<: *vlm-env
+      <<: *ollama-env
       QDRANT_URL: http://qdrant:6333
       EMBEDDER_URL: http://embedder:8001
       DATA_DIR: /data
@@ -88,7 +89,6 @@ services:
       ASR_DEVICE: ${ASR_DEVICE:-cpu}
       ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-int8}
       ASR_LANGUAGE: ${ASR_LANGUAGE:-}
-      TEXT_EMBED_MODEL: ${TEXT_EMBED_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
       INDEX_ENABLED: ${INDEX_ENABLED:-true}
       FRAME_EMBED_ENABLED: ${FRAME_EMBED_ENABLED:-true}
       FRAME_EMBED_MODEL: ${FRAME_EMBED_MODEL:-google/siglip2-so400m-patch14-384}

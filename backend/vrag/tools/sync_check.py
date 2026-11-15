@@ -14,7 +14,7 @@ from pathlib import Path
 from PIL import Image, ImageStat
 
 from vrag import index
-from vrag.artifacts import artifact_dir
+from vrag.artifacts import artifact_dir, save_timeline
 from vrag.config import get_settings
 from vrag.ingest import ingest
 
@@ -105,9 +105,11 @@ def main() -> int:
     make_clip(clip)
     timeline = ingest(clip, force=True)
     video = timeline.video
+    out = artifact_dir(video.video_id)
     if get_settings().index_enabled:
         index.replace(video, [])
-    out = artifact_dir(video.video_id)
+        timeline.stages.pop("index", None)
+        save_timeline(timeline, out / "timeline.json")
     print(
         f"probe: duration={video.duration_s:.3f}s video_start={video.video_start_s} "
         f"audio_start={video.audio_start_s} vfr={video.is_vfr}"

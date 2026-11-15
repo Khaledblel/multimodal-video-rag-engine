@@ -17,7 +17,8 @@ class Settings(BaseSettings):
     asr_compute_type: str = "int8"
     asr_language: str = ""
 
-    text_embed_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    text_embed_model: str = "qwen3-embedding:0.6b"
+    text_embed_dim: int = 1024
     index_enabled: bool = True
 
     frame_embed_enabled: bool = True
@@ -34,6 +35,7 @@ class Settings(BaseSettings):
     vlm_frame_side: int = 768
     vlm_keep_alive: str = "5m"
     vlm_think: bool = False
+    planner_enabled: bool = True
     ollama_url: str = "http://ollama:11434"
 
 

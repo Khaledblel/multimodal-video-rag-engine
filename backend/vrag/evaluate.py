@@ -1,6 +1,8 @@
 """Retrieval eval: Recall@K and MRR of search hits against labeled time spans, for each way of searching.
 
-Usage: python -m vrag.evaluate [QUERIES]   (default: eval/queries.json)
+Usage: python -m vrag.evaluate [QUERIES] [--plan]   (default: eval/queries.json)
+
+--plan sends every query through the query planner first, to compare with a run without it.
 """
 
 from __future__ import annotations
@@ -11,12 +13,13 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 from pydantic import ValidationError
 
-from vrag import index
+from vrag import index, ollama, planner
 from vrag.config import get_settings
 from vrag.schemas.evalset import EvalSet, Target
-from vrag.schemas.search import Hit
+from vrag.schemas.search import Hit, Plan
 
 KS = (1, 5, 10)
 MODES = ("text", "frame", "fused")
@@ -44,6 +47,7 @@ def _metrics(ranks: list[int | None]) -> dict[str, float]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("queries", nargs="?", type=Path, default=Path("eval/queries.json"))
+    parser.add_argument("--plan", action="store_true", help="send every query through the query planner first")
     args = parser.parse_args()
     settings = get_settings()
 
@@ -62,12 +66,26 @@ def main() -> int:
 
     modes = MODES if settings.frame_embed_enabled else ("text",)
     per_query = []
-    for query in eval_set.queries:
-        row = {"id": query.id, "category": query.category}
-        for mode in modes:
-            hits = index.search(query.query, limit=max(KS), mode=mode)
-            row[mode] = _rank(hits, query.targets, eval_set.tolerance_s)
-        per_query.append(row)
+    # What the planner did over the whole set: how often it wrote the plan, changed the text, chose a video, failed.
+    planned = {"planned": 0, "changed_text": 0, "chose_video": 0, "failed": 0}
+    try:
+        for query in eval_set.queries:
+            plan = planner.plan(query.query, use=True) if args.plan else Plan(text=query.query)
+            row = {"id": query.id, "category": query.category}
+            if args.plan:
+                row["plan"] = plan.model_dump()
+                planned["planned"] += plan.planned
+                planned["changed_text"] += plan.text != query.query
+                planned["chose_video"] += plan.video_id is not None
+                planned["failed"] += plan.error is not None
+            for mode in modes:
+                hits = index.search(plan.text, limit=max(KS), video_id=plan.video_id, mode=mode)
+                row[mode] = _rank(hits, query.targets, eval_set.tolerance_s)
+            per_query.append(row)
+    except (ollama.OllamaError, httpx.HTTPError) as exc:
+        # Text queries are embedded in Ollama, frame queries in the embedder service.
+        print(f"evaluation stopped: {exc}")
+        return 1
 
     metrics: dict[str, dict[str, dict[str, float]]] = {}
     for mode in modes:
@@ -79,6 +97,11 @@ def main() -> int:
 
     columns = [f"R@{k}" for k in KS] + ["MRR"]
     print(f"{index.collection_name()}: {len(per_query)} queries, tolerance {eval_set.tolerance_s} s")
+    if args.plan:
+        print(
+            f"planner: wrote {planned['planned']} of {len(per_query)} plans, changed the text of "
+            f"{planned['changed_text']}, chose a video for {planned['chose_video']}, failed on {planned['failed']}"
+        )
     print(f"{'mode':<7}{'category':<16}{'n':>4}" + "".join(f"{column:>7}" for column in columns))
     for mode in modes:
         for name, row in metrics[mode].items():
@@ -106,6 +129,7 @@ def main() -> int:
         "window_max_s": index.WINDOW_MAX_S,
         "window_gap_s": index.WINDOW_GAP_S,
         "tolerance_s": eval_set.tolerance_s,
+        "planner": planned if args.plan else None,
         "modes": list(modes),
         "metrics": metrics,
         "per_query": per_query,

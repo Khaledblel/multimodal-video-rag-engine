@@ -1,4 +1,4 @@
-"""Calls to the Ollama service, which runs the VL model. Every failure is raised as OllamaError."""
+"""Calls to the Ollama service, which runs the text embedder and the VL model. Every failure is raised as OllamaError."""
 
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ QUICK = httpx.Timeout(10.0)
 # Ollama loads the model and reads the whole prompt before the first token arrives.
 SLOW = httpx.Timeout(10.0, read=600.0)
 TEMPERATURE = 0.2
+EMBED_BATCH = 32
+EMBED_CONTEXT = 2048
 
 
 class OllamaError(RuntimeError):
@@ -45,10 +47,16 @@ def _no_reply(url: str, exc: httpx.HTTPError) -> OllamaError:
     return OllamaError(f"no reply from Ollama at {url}: {type(exc).__name__} {exc}".rstrip())
 
 
-def _request(method: str, path: str, body: dict | None = None) -> httpx.Response:
+def not_downloaded(model: str) -> str:
+    return f"{model} is not downloaded; run: docker compose exec worker python -m vrag.tools.ollama_check --pull"
+
+
+def _request(
+    method: str, path: str, body: dict | None = None, timeout: httpx.Timeout = QUICK
+) -> httpx.Response:
     url = get_settings().ollama_url
     try:
-        return httpx.request(method, f"{url}{path}", json=body, timeout=QUICK)
+        return httpx.request(method, f"{url}{path}", json=body, timeout=timeout)
     except httpx.HTTPError as exc:
         raise _no_reply(url, exc) from exc
 
@@ -116,12 +124,29 @@ def _keep_alive(value: str) -> str | int:
         return value
 
 
-def chat(messages: list[dict], *, max_tokens: int, think: bool | None = None) -> Iterator[dict]:
-    """Stream a reply from the VL model.
+def embed(texts: list[str]) -> list[list[float]]:
+    """One unit-length vector per text, from the text embedding model."""
+    settings = get_settings()
+    vectors: list[list[float]] = []
+    for start in range(0, len(texts), EMBED_BATCH):
+        body = {
+            "model": settings.text_embed_model,
+            "input": texts[start : start + EMBED_BATCH],
+            "options": {"num_ctx": EMBED_CONTEXT},
+        }
+        response = _request("POST", "/api/embed", body, SLOW)
+        if response.status_code != 200:
+            reason = _reason(response)
+            if response.status_code == 404 or "not found" in reason.lower():
+                raise OllamaError(not_downloaded(settings.text_embed_model))
+            raise OllamaError(reason)
+        vectors += response.json()["embeddings"]
+    return vectors
 
-    Each chunk has message.content (and message.thinking, from a model that thinks first). The last one has
-    done=true and the counts: prompt_eval_count, eval_count, and durations in nanoseconds.
-    """
+
+def _chat_body(messages: list[dict], max_tokens: int, think: bool | None) -> dict:
+    """What every request to the VL model shares. The context size is the same in all of them, because
+    Ollama loads the model again when it changes."""
     settings = get_settings()
     options: dict = {"num_ctx": settings.vlm_num_ctx, "num_predict": max_tokens}
     if not think:
@@ -129,7 +154,6 @@ def chat(messages: list[dict], *, max_tokens: int, think: bool | None = None) ->
     body = {
         "model": settings.vlm_model,
         "messages": messages,
-        "stream": True,
         "options": options,
         "keep_alive": _keep_alive(settings.vlm_keep_alive),
         "truncate": False,
@@ -137,4 +161,26 @@ def chat(messages: list[dict], *, max_tokens: int, think: bool | None = None) ->
     }
     if think is not None:
         body["think"] = think
-    return _stream("/api/chat", body)
+    return body
+
+
+def chat(messages: list[dict], *, max_tokens: int, think: bool | None = None) -> Iterator[dict]:
+    """Stream a reply from the VL model.
+
+    Each chunk has message.content (and message.thinking, from a model that thinks first). The last one has
+    done=true and the counts: prompt_eval_count, eval_count, and durations in nanoseconds.
+    """
+    return _stream("/api/chat", _chat_body(messages, max_tokens, think) | {"stream": True})
+
+
+def chat_json(messages: list[dict], schema: dict, *, max_tokens: int, think: bool | None = None) -> str:
+    """One reply from the VL model as JSON text that follows the schema. Ollama holds the model to it."""
+    body = _chat_body(messages, max_tokens, think) | {"stream": False, "format": schema}
+    body["options"]["temperature"] = 0
+    response = _request("POST", "/api/chat", body, SLOW)
+    if response.status_code != 200:
+        raise OllamaError(_reason(response))
+    try:
+        return str(response.json()["message"]["content"])
+    except (ValueError, KeyError, TypeError) as exc:
+        raise OllamaError(f"unexpected reply from Ollama: {exc}") from exc

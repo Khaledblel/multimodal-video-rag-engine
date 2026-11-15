@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 from pydantic import ValidationError
 
-from vrag import asr, index, media
+from vrag import asr, index, media, ollama
 from vrag.artifacts import artifact_dir, load_timeline, save_timeline
 from vrag.config import get_settings
 from vrag.schemas.timeline import StageRecord, Timeline
@@ -179,7 +179,8 @@ def main() -> int:
 
     try:
         timeline = ingest(args.video, force=args.force)
-    except (OSError, media.MediaError, ValidationError) as exc:
+    except (OSError, media.MediaError, ValidationError, ollama.OllamaError) as exc:
+        # Ollama embeds the transcript for the index. The stages before it are saved and are not redone.
         print(f"ingest failed: {exc}", file=sys.stderr)
         return 1
 

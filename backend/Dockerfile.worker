@@ -3,8 +3,7 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    HF_HOME=/models/huggingface \
-    FASTEMBED_CACHE_PATH=/models/fastembed
+    HF_HOME=/models/huggingface
 
 # faster-whisper on a GPU loads cuBLAS and cuDNN for CUDA 12 from the packages PyTorch installs.
 ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.12/site-packages/nvidia/cudnn/lib

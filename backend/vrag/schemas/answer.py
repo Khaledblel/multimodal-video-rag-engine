@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel
 
+from vrag.schemas.search import Plan
+
 
 class Line(BaseModel):
     """One transcript line of a moment."""
@@ -45,11 +47,12 @@ class AnswerStats(BaseModel):
     prompt_tokens: int | None = None
     answer_tokens: int | None = None
     done_reason: str | None = None
+    plan_s: float
     search_s: float
     first_token_s: float | None = None
     total_s: float
     load_s: float | None = None
-    loaded_context: int | None = None 
+    loaded_context: int | None = None
     size_bytes: int | None = None
     vram_bytes: int | None = None
 
@@ -57,6 +60,7 @@ class AnswerStats(BaseModel):
 class AnswerResponse(BaseModel):
     query: str
     mode: str
+    plan: Plan
     answer: str
     citations: list[int]
     moments: list[Moment]

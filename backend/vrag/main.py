@@ -7,7 +7,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from vrag import __version__, answer, index, ollama
+from vrag import __version__, answer, index, ollama, planner
 from vrag.config import get_settings
 from vrag.schemas.answer import AnswerResponse
 from vrag.schemas.search import SearchResponse
@@ -63,15 +63,22 @@ def search(
     video_id: str | None = None,
     limit: Annotated[int, Query(ge=1, le=50)] = 5,
     mode: Literal["fused", "text", "frame"] = "fused",
+    plan: bool | None = None,
 ) -> SearchResponse:
+    """Search every indexed video, or one. `plan` turns the query planner on or off for this request."""
     if mode == "frame" and not settings.frame_embed_enabled:
         raise HTTPException(status_code=400, detail="frame search is turned off (FRAME_EMBED_ENABLED=false)")
+    # A planner that fails does not fail the search: the query then passes through as it is.
+    made = planner.plan(q, video_id, plan)
     try:
-        hits = index.search(q, limit, video_id, mode)
+        hits = index.search(made.text, limit, made.video_id, mode)
     except httpx.HTTPError as exc:
         # Frame search embeds the query in the embedder service.
         raise HTTPException(status_code=503, detail=f"embedder unavailable: {exc}") from exc
-    return SearchResponse(query=q, collection=index.collection_name(), mode=mode, hits=hits)
+    except ollama.OllamaError as exc:
+        # Text search embeds the query in Ollama.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return SearchResponse(query=q, collection=index.collection_name(), mode=mode, plan=made, hits=hits)
 
 @app.get("/ask", response_model=None)
 def ask(
@@ -80,11 +87,13 @@ def ask(
     limit: Annotated[int, Query(ge=1, le=10)] = 5,
     frames: Annotated[int, Query(ge=0, le=5)] = 3,
     mode: Literal["fused", "text", "frame"] = "fused",
+    plan: bool | None = None,
     stream: bool = False,
 ) -> AnswerResponse | StreamingResponse:
     """Answer a question from the moments a search finds. `limit` is the number of hits, `frames` the frames per hit.
 
-    With stream=true the reply is newline-delimited JSON: a "moments" event, "token" events, then "done" or "error".
+    `plan` turns the query planner on or off for this request. With stream=true the reply is newline-delimited
+    JSON: a "moments" event, "token" events, then "done" or "error".
     """
     if not settings.vlm_enabled:
         raise HTTPException(status_code=400, detail="answers are turned off (VLM_ENABLED=false)")
@@ -92,7 +101,7 @@ def ask(
         raise HTTPException(status_code=400, detail="frame search is turned off (FRAME_EMBED_ENABLED=false)")
     # Searching and building the prompt come before the reply starts, so their failures still get a status code.
     try:
-        prepared = answer.prepare(q, limit, video_id, mode, frames)
+        prepared = answer.prepare(q, limit, video_id, mode, frames, plan)
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=503, detail=f"embedder unavailable: {exc}") from exc
     except ollama.OllamaError as exc:

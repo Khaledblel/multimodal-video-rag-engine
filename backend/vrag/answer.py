@@ -1,6 +1,6 @@
 """Answer a question from the moments a search finds: their transcript and frames go to the VL model, which cites them.
 
-Usage: python -m vrag.answer "QUESTION" [--video VIDEO_ID] [--limit 5] [--frames 3] [--mode fused]
+Usage: python -m vrag.answer "QUESTION" [--video VIDEO_ID] [--limit 5] [--frames 3] [--mode fused] [--no-plan]
 """
 
 from __future__ import annotations
@@ -21,11 +21,11 @@ import httpx
 from PIL import Image
 from pydantic import ValidationError
 
-from vrag import index, ollama
+from vrag import index, ollama, planner
 from vrag.artifacts import artifact_dir, load_timeline
 from vrag.config import get_settings
 from vrag.schemas.answer import AnswerResponse, AnswerStats, FrameRef, Line, Moment
-from vrag.schemas.search import Hit
+from vrag.schemas.search import Hit, Plan
 from vrag.schemas.timeline import Frame, Timeline
 
 log = logging.getLogger("vrag.answer")
@@ -60,6 +60,7 @@ class Prepared:
 
     query: str
     mode: str
+    plan: Plan
     moments: list[Moment]
     messages: list[dict]
     hits: int
@@ -68,6 +69,7 @@ class Prepared:
     estimate: int
     max_tokens: int
     think: bool | None
+    plan_s: float
     search_s: float
 
 
@@ -93,7 +95,7 @@ def fit(width: int, height: int, side: int) -> tuple[int, int]:
 
 
 def image_tokens(size: tuple[int, int]) -> int:
-    """What an image of this size should cost the model. tools/vlm_check compares it with Ollama's count."""
+    """What an image of this size should cost the model. tools/ollama_check compares it with Ollama's count."""
     return (size[0] // PIXELS_PER_TOKEN) * (size[1] // PIXELS_PER_TOKEN) + 2
 
 
@@ -219,15 +221,13 @@ def prepare(
     video_id: str | None = None,
     mode: str = "fused",
     frames_per_hit: int = 3,
+    use_planner: bool | None = None,
 ) -> Prepared:
-    """Search, merge the hits into moments, and build a prompt that fits in the context size."""
+    """Plan and run the search, merge the hits into moments, and build a prompt that fits in the context size."""
     settings = get_settings()
     model = ollama.show(settings.vlm_model)
     if model is None:
-        raise ollama.OllamaError(
-            f"{settings.vlm_model} is not downloaded; run: "
-            "docker compose exec worker python -m vrag.tools.vlm_check --pull"
-        )
+        raise ollama.OllamaError(ollama.not_downloaded(settings.vlm_model))
     think = settings.vlm_think if model.thinks else None
     if frames_per_hit and not model.vision:
         log.warning("%s takes no images: answering from the transcript alone", settings.vlm_model)
@@ -235,7 +235,10 @@ def prepare(
     max_tokens = ANSWER_TOKENS + (THINKING_TOKENS if think else 0)
 
     started = time.perf_counter()
-    hits = index.search(query, limit, video_id, mode)
+    plan = planner.plan(query, video_id, use_planner)
+    plan_s = time.perf_counter() - started
+    started = time.perf_counter()
+    hits = index.search(plan.text, limit, plan.video_id, mode)
     search_s = time.perf_counter() - started
 
     question = f"Question: {query}"
@@ -297,6 +300,7 @@ def prepare(
     return Prepared(
         query=query,
         mode=mode,
+        plan=plan,
         moments=moments,
         messages=messages,
         hits=len(hits),
@@ -305,6 +309,7 @@ def prepare(
         estimate=used,
         max_tokens=max_tokens,
         think=think,
+        plan_s=plan_s,
         search_s=search_s,
     )
 
@@ -335,7 +340,8 @@ def summary(stats: AnswerStats) -> str:
         f"{stats.hits} hits in {stats.moments} moments, {frames}",
         f"prompt {prompt} of {stats.context} tokens (estimated {stats.prompt_tokens_estimate})",
         f"answer {written} tokens (ended by: {stats.done_reason})",
-        f"search {stats.search_s:.2f} s, first token {first} s, total {stats.total_s:.2f} s",
+        f"plan {stats.plan_s:.2f} s, search {stats.search_s:.2f} s, "
+        f"first token {first} s, total {stats.total_s:.2f} s",
     ]
     if stats.size_bytes:
         on_gpu = (stats.vram_bytes or 0) / stats.size_bytes
@@ -356,6 +362,7 @@ def generate(prepared: Prepared) -> Iterator[dict]:
         "type": "moments",
         "query": prepared.query,
         "mode": prepared.mode,
+        "plan": prepared.plan.model_dump(),
         "moments": [moment.model_dump() for moment in prepared.moments],
     }
     if not prepared.moments:
@@ -399,6 +406,7 @@ def generate(prepared: Prepared) -> Iterator[dict]:
         prompt_tokens=final.get("prompt_eval_count"),
         answer_tokens=final.get("eval_count"),
         done_reason=final.get("done_reason"),
+        plan_s=round(prepared.plan_s, 3),
         search_s=round(prepared.search_s, 3),
         first_token_s=None if first_token_s is None else round(first_token_s, 3),
         total_s=round(total_s, 3),
@@ -427,6 +435,7 @@ def collect(prepared: Prepared) -> AnswerResponse:
             return AnswerResponse(
                 query=prepared.query,
                 mode=prepared.mode,
+                plan=prepared.plan,
                 answer=event["answer"],
                 citations=event["citations"],
                 moments=prepared.moments,
@@ -446,6 +455,7 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=5, help="search hits to answer from (default 5)")
     parser.add_argument("--frames", type=int, default=3, help="frames per hit (default 3; 0 sends none)")
     parser.add_argument("--mode", choices=index.MODES, default="fused")
+    parser.add_argument("--no-plan", action="store_true", help="search with the question as it is")
     args = parser.parse_args()
 
     settings = get_settings()
@@ -456,12 +466,17 @@ def main() -> int:
         print("frame search is turned off (FRAME_EMBED_ENABLED=false)", file=sys.stderr)
         return 1
     try:
-        prepared = prepare(args.question, max(1, args.limit), args.video, args.mode, max(0, args.frames))
+        prepared = prepare(
+            args.question, max(1, args.limit), args.video, args.mode, max(0, args.frames),
+            False if args.no_plan else None,
+        )
     except (ollama.OllamaError, httpx.HTTPError) as exc:
         # httpx errors come from the embedder, which embeds the question for the frame search.
         print(f"cannot answer: {exc}", file=sys.stderr)
         return 1
 
+    if prepared.plan.planned:
+        print(f"plan: search for {prepared.plan.text!r} in {prepared.plan.video_id or 'every video'}")
     for moment in prepared.moments:
         times = ", ".join(clock(frame.t) for frame in moment.frames) or "none"
         print(f"{_label(moment)}  frames: {times}")
