@@ -51,3 +51,4 @@ docker compose ps
 if grep -q '^COMPOSE_FILE=.*compose\.gpu\.yaml' .env; then
   docker compose exec -T worker python -m vrag.tools.gpu_check
 fi
+docker compose exec -T worker python -m vrag.tools.vlm_check --pull

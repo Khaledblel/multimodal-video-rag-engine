@@ -2,7 +2,7 @@
 
 Ask questions about your videos in natural language. Speech transcripts and video frames are aligned on a single timeline and indexed in a vector database, so a question returns the matching moments and an answer grounded in what was said and shown.
 
-> Early development: video ingestion (audio, 1 FPS frames and a transcript with word timestamps) and search over what is said and what is shown exist so far. Answering is being added step by step.
+> Early development: video ingestion (audio, 1 FPS frames and a transcript with word timestamps), search over what is said and what is shown, and answers that cite the moments they rest on exist so far. More is being added step by step.
 
 ## Quick start
 
@@ -56,6 +56,39 @@ Settings in `.env`:
 - `FRAME_EMBED_ENABLED=false` turns frame search off, and `INDEX_ENABLED=false` skips indexing.
 
 Each combination of models gets its own collection; ingest the videos again to fill it.
+
+## Ask a question
+
+Answers are written by [Qwen3-VL](https://ollama.com/library/qwen3-vl) (8B, Instruct edition), which [Ollama](https://ollama.com) runs in its own container. Download the model once, about 6 GB; the same command checks that it sees images:
+
+```bash
+docker compose exec worker python -m vrag.tools.vlm_check --pull
+```
+
+Then ask:
+
+```bash
+curl -G localhost:8000/ask --data-urlencode 'q=what do they decide about the budget?'
+```
+
+The question is searched as above. Hits that follow each other in time are merged into one moment, and the model gets each moment's transcript, with the time of every line, and about three frames per hit. The response holds:
+
+- `answer`: the text, which cites the moments it rests on as `[1]`, `[2]`;
+- `moments`: each numbered moment with its video, its start and end in seconds, its transcript lines and the frames that were sent;
+- `citations`: the numbers the answer used;
+- `stats`: prompt and answer tokens, timings and the model's memory use.
+
+Options: `video_id`, `mode` and `limit` (the hits to answer from, 5 by default) as for search, `frames=...` for the frames per hit (3 by default; 0 sends none), and `stream=true` to get the answer while it is written, as newline-delimited JSON events (`moments`, then `token` pieces, then `done`). From a terminal, `docker compose exec worker python -m vrag.answer "your question"` prints the answer as it arrives.
+
+Settings in `.env`:
+
+- `VLM_MODEL` picks another vision model from Ollama's library, such as `qwen3-vl:4b-instruct` for a smaller GPU.
+- `VLM_NUM_CTX` is the context size in tokens (16384). Frames are left out when a prompt would not fit in it.
+- `VLM_FRAME_SIDE` is the longer side, in pixels, that frames are scaled down to (768).
+- `VLM_KEEP_ALIVE` is how long the model stays in memory after an answer (`5m`; `0` unloads it at once).
+- `VLM_THINK=true` lets a Thinking edition, such as `qwen3-vl:8b`, reason before it answers.
+- `OLLAMA_URL` points to another Ollama server, for example one that runs on the host (`http://host.docker.internal:11434` with Docker Desktop).
+- `VLM_ENABLED=false` turns answers off.
 
 ## Evaluate retrieval
 

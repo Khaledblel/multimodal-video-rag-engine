@@ -28,6 +28,14 @@ class Settings(BaseSettings):
     fusion_text_weight: float = 1.0
     fusion_frame_weight: float = 1.0
 
+    vlm_enabled: bool = True
+    vlm_model: str = "qwen3-vl:8b-instruct"
+    vlm_num_ctx: int = 16384
+    vlm_frame_side: int = 768
+    vlm_keep_alive: str = "5m"
+    vlm_think: bool = False
+    ollama_url: str = "http://ollama:11434"
+
 
 @lru_cache
 def get_settings() -> Settings:

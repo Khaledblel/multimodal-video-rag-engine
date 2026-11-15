@@ -16,3 +16,5 @@ services:
     deploy: *gpu
   embedder:
     deploy: *gpu
+  ollama:
+    deploy: *gpu

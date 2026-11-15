@@ -59,14 +59,11 @@ def build_windows(segments: list[Segment], duration_s: float | None = None) -> l
     ]
 
 
-def window_frames(window: Window, frames: list[Frame]) -> list[int]:
-    """Positions of a window's frames: those inside it, padded so that even a very short window has one."""
-    rows = [
-        i for i, frame in enumerate(frames)
-        if window.start - FRAME_PAD_S <= frame.t < window.end + FRAME_PAD_S
-    ]
+def span_frames(start: float, end: float, frames: list[Frame]) -> list[int]:
+    """Positions of the frames of a time span: those inside it, padded so that even a very short span has one."""
+    rows = [i for i, frame in enumerate(frames) if start - FRAME_PAD_S <= frame.t < end + FRAME_PAD_S]
     if not rows and frames:
-        middle = (window.start + window.end) / 2
+        middle = (start + end) / 2
         rows = [min(range(len(frames)), key=lambda i: abs(frames[i].t - middle))]
     return rows
 
@@ -150,7 +147,8 @@ def replace(
         if window.id in text_vectors:
             vector["text"] = text_vectors[window.id].tolist()
         if frame_vectors is not None and frames:
-            vector["frame"] = frame_vectors[window_frames(window, frames)].astype(np.float32).tolist()
+            rows = span_frames(window.start, window.end, frames)
+            vector["frame"] = frame_vectors[rows].astype(np.float32).tolist()
         if not vector:
             continue
         points.append(
