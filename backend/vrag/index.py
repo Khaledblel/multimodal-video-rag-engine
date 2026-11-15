@@ -22,6 +22,7 @@ FRAME_PAD_S = 1.0
 UPSERT_BATCH = 16
 RRF_K = 60
 MODES = ("fused", "text", "frame")
+MULTIVECTOR_NUMBERS = 2**20
 
 
 def build_windows(segments: list[Segment], duration_s: float | None = None) -> list[Window]:
@@ -140,14 +141,18 @@ def replace(
     spoken = [window for window in windows if window.text]
     embedded = _embedder().embed([window.text for window in spoken]) if spoken else []
     text_vectors = {window.id: vector for window, vector in zip(spoken, embedded)}
+    most_frames = (MULTIVECTOR_NUMBERS - 1) // frame_vectors.shape[1] if frame_vectors is not None else 0
     points = []
     for window in windows:
         # A point carries only the vectors its window has: a stretch without speech has no text vector.
+        # Qdrant rejects an empty list of frame vectors, so a window without frames leaves that key out.
         vector: dict[str, list] = {}
         if window.id in text_vectors:
             vector["text"] = text_vectors[window.id].tolist()
         if frame_vectors is not None and frames:
             rows = span_frames(window.start, window.end, frames)
+            if len(rows) > most_frames:
+                rows = [rows[i * len(rows) // most_frames] for i in range(most_frames)]
             vector["frame"] = frame_vectors[rows].astype(np.float32).tolist()
         if not vector:
             continue
