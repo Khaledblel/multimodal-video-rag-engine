@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     planner_enabled: bool = True
     ollama_url: str = "http://ollama:11434"
 
+    proxy_enabled: bool = True
+    proxy_size: int = 720
+
 
 @lru_cache
 def get_settings() -> Settings:

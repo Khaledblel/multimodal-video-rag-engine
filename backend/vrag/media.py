@@ -112,6 +112,45 @@ def extract_audio(src: Path, audio_index: int, dst: Path) -> None:
     tmp.replace(dst)
 
 
+def make_proxy(
+    src: Path,
+    video_index: int,
+    audio_index: int | None,
+    dst: Path,
+    max_side: int,
+    width: int | None,
+    height: int | None,
+) -> None:
+    """Write a copy that every browser plays and seeks in: H.264 and AAC in MP4.
+
+    Its shorter side is at most max_side pixels, so 720 gives 1280x720 for a landscape video and 720x1280
+    for a portrait one. A smaller video keeps its size. `width` and `height` are the video's as displayed.
+    The copy is made by the same FFmpeg, from the same file, as the frames and the audio, so it shares their
+    timeline: a time from the index is a time in the copy.
+    """
+    side = max_side - max_side % 2
+    if width and height and min(width, height) > side:
+        scale = f"scale=-2:{side}" if width >= height else f"scale={side}:-2"
+    else:
+        scale = "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+    if audio_index is None:
+        audio = ["-an"]
+    else:
+        audio = ["-map", f"0:{audio_index}", "-c:a", "aac", "-b:a", "128k", "-ac", "2"]
+    tmp = dst.with_suffix(".tmp.mp4")
+    _run(
+        [
+            "ffmpeg", "-nostdin", "-v", "error", "-y", *_LOCAL_ONLY, "-i", str(src),
+            "-map", f"0:{video_index}", *audio, "-sn", "-dn",
+            "-vf", scale,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            str(tmp),
+        ]
+    )
+    tmp.replace(dst)
+
+
 def extract_frames(src: Path, video_index: int, out_dir: Path) -> list[Frame]:
     if out_dir.exists():
         shutil.rmtree(out_dir)

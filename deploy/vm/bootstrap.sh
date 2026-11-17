@@ -44,9 +44,12 @@ plugin buildx docker-buildx-plugin docker-buildx
 if nvidia-smi >/dev/null 2>&1 && ! grep -q '^COMPOSE_FILE=' .env; then
   echo 'COMPOSE_FILE=compose.yaml:compose.gpu.yaml' >> .env
 fi
-install -d -m 0775 -o 1000 -g 1000 data data/media data/artifacts
+install -d -m 0775 -o 1000 -g 1000 data data/media data/artifacts data/jobs
 
-docker compose up -d --build
+docker compose up -d --build qdrant ollama embedder api worker
+# The web UI is built after the rest, so a failure in its build cannot keep the stack from starting.
+docker compose up -d --build web \
+  || echo "WARNING: the web UI did not build or start. Everything else is running." >&2
 docker compose ps
 if grep -q '^COMPOSE_FILE=.*compose\.gpu\.yaml' .env; then
   docker compose exec -T worker python -m vrag.tools.gpu_check

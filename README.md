@@ -2,9 +2,9 @@
 
 Ask questions about your videos in natural language. Speech transcripts and video frames are aligned on a single timeline and indexed in a vector database, so a question returns the matching moments and an answer grounded in what was said and shown.
 
-Everything runs on your own machine, in Docker. FFmpeg and [faster-whisper](https://github.com/SYSTRAN/faster-whisper) turn a video into a timeline. [Qwen3-Embedding](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B) and [SigLIP 2](https://huggingface.co/google/siglip2-so400m-patch14-384) index it in [Qdrant](https://qdrant.tech). [Qwen3-VL](https://ollama.com/library/qwen3-vl) plans each search and writes answers that cite the moments they rest on. [Ollama](https://ollama.com) runs both Qwen models.
+Everything runs on your own machine, in Docker. FFmpeg and [faster-whisper](https://github.com/SYSTRAN/faster-whisper) turn a video into a timeline. [Qwen3-Embedding](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B) and [SigLIP 2](https://huggingface.co/google/siglip2-so400m-patch14-384) index it in [Qdrant](https://qdrant.tech). [Qwen3-VL](https://ollama.com/library/qwen3-vl) plans each search and writes answers that cite the moments they rest on. [Ollama](https://ollama.com) runs both Qwen models. A web UI in the browser ties it together: add a video, ask, and jump to the cited moment.
 
-**Contents:** [Status](#status) · [How it works](#how-it-works) · [Requirements](#requirements) · [Quick start](#quick-start) · [Ingest a video](#ingest-a-video) · [Search](#search) · [Ask a question](#ask-a-question) · [Evaluate retrieval](#evaluate-retrieval) · [Configuration](#configuration) · [Services and storage](#services-and-storage) · [Run on a rented VM](#run-on-a-rented-vm) · [Project layout](#project-layout) · [If something goes wrong](#if-something-goes-wrong) · [Known limits](#known-limits) · [Roadmap](#roadmap)
+**Contents:** [Status](#status) · [How it works](#how-it-works) · [Requirements](#requirements) · [Quick start](#quick-start) · [Web UI](#web-ui) · [Ingest a video](#ingest-a-video) · [Search](#search) · [Ask a question](#ask-a-question) · [Evaluate retrieval](#evaluate-retrieval) · [Configuration](#configuration) · [Services and storage](#services-and-storage) · [Run on a rented VM](#run-on-a-rented-vm) · [Project layout](#project-layout) · [If something goes wrong](#if-something-goes-wrong) · [Known limits](#known-limits) · [Roadmap](#roadmap)
 
 ## Status
 
@@ -16,10 +16,11 @@ Implemented:
 - Search over what is said and over what is shown, alone or fused.
 - A query planner that narrows a search to the video a question names.
 - Answers that cite the moments they rest on.
+- A web UI: add a video, follow its ingest, ask, and play the cited moments.
 - An evaluation of retrieval, with [first results](#baseline-results).
 - GPU support for the containers that run models.
 
-Not implemented yet: a web UI, speaker labels, emotion, sound search and on-screen text. See the [roadmap](#roadmap).
+Not implemented yet: speaker labels, emotion, sound search and on-screen text. See the [roadmap](#roadmap).
 
 ## How it works
 
@@ -48,7 +49,7 @@ flowchart TD
 
 ### Ingest: from a video to a timeline
 
-`python -m vrag.ingest` takes one video through six stages and keeps everything it produces in `data/artifacts/<video_id>/`. The id is the first 16 hex characters of the file's SHA-256, so the same file always lands in the same folder.
+`python -m vrag.ingest` takes one video through seven stages and keeps everything it produces in `data/artifacts/<video_id>/`. The id is the first 16 hex characters of the file's SHA-256, so the same file always lands in the same folder.
 
 | Stage | What it does | Output |
 |---|---|---|
@@ -58,6 +59,7 @@ flowchart TD
 | Transcript | faster-whisper transcribes the audio, with voice activity detection and a timestamp for every word | `segments` in `timeline.json` |
 | Frame vectors | SigLIP 2 turns every frame into a vector of 1152 numbers | `frame_vectors.npy` |
 | Index | The video is cut into windows, and each window becomes one point in Qdrant | `windows` in `timeline.json` |
+| Proxy | FFmpeg writes a copy that every browser plays and seeks in: H.264 and AAC in MP4, at most 720 pixels on its shorter side, on the same clock as the rest | `proxy.mp4` |
 
 Every stage records its version and settings in `timeline.json`. Running the command again skips what is still valid and redoes what changed, for example after picking another Whisper model.
 
@@ -97,6 +99,12 @@ The two rankings are combined by weighted reciprocal rank fusion. A window score
 4. Returns the answer together with the numbered moments, so every citation leads to a video and a time range.
 
 The context size goes with every request. Ollama's own default depends on the GPU's memory, and a prompt longer than the context would otherwise lose its oldest part without notice. When a prompt would not fit, frames are left out, starting with the lowest-ranked moments.
+
+### The web UI and ingest jobs
+
+The UI is a small Next.js app, built into static files and served by nginx in its own container. nginx also passes everything under `/api/` on to the API, so the browser deals with one address.
+
+A video added in the UI is sent to the API, which stores it in `data/media/` and queues an ingest job as a file in `data/jobs/`. The worker picks the jobs up one at a time, runs each ingest in a process of its own, and writes the stage it is at into the job's file, which the UI shows. Playing a moment loads the video's `proxy.mp4` and seeks to the moment's start.
 
 ### Models
 
@@ -139,15 +147,12 @@ The health check answers `"status": "ok"` once Qdrant is reachable and `data/` i
 docker compose exec worker python -m vrag.tools.ollama_check --pull
 ```
 
-Put a video in `data/media/` and ingest it. The first run downloads the Whisper and SigLIP 2 models:
+Now open `http://localhost:3000`, add a video and ask about it. The first ingest downloads the Whisper and SigLIP 2 models.
+
+The same from a terminal: put a video in `data/media/`, ingest it, then search it or ask about it.
 
 ```bash
 docker compose exec worker python -m vrag.ingest /data/media/clip.mp4
-```
-
-Now search it, or ask about it:
-
-```bash
 curl -G localhost:8000/search --data-urlencode 'q=when do they talk about the budget'
 curl -G localhost:8000/ask --data-urlencode 'q=what do they decide about the budget?'
 ```
@@ -158,6 +163,26 @@ Notes:
 - The containers run as user id 1000 and write to `./data`. If your own user has another id, hand the folder over: `sudo chown -R 1000:1000 data`.
 - After editing `.env`, run `docker compose up -d` again so the containers pick up the change.
 - `docker compose down` stops everything and keeps the index and the downloaded models. `docker compose down -v` deletes them as well.
+
+## Web UI
+
+`http://localhost:3000` shows one page:
+
+- **Videos.** "Add a video" sends a file and queues its ingest. The job shows the stage it is at, and the video joins the list when it is done. A click on a video plays it.
+- **Ask.** Type a question, for every video or for one. The answer appears while it is written. Each citation, such as `[2]`, is a button that plays that moment.
+- **Moments.** Under the answer, every moment the model was given: its video and time range, the frames it saw and what is said in it. A click on a frame or on a line's time plays the video from there.
+
+The UI uses the same API as the commands below. Besides `/search` and `/ask`, the API serves:
+
+| Endpoint | What it does |
+|---|---|
+| `GET /videos` | The ingested videos: id, name, duration, whether each is indexed and playable |
+| `PUT /videos?name=clip.mp4` | Stores the request body as a video file and queues its ingest: `curl -T clip.mp4 'localhost:8000/videos?name=clip.mp4'` |
+| `GET /jobs`, `GET /jobs/{id}` | The ingest jobs: status, the stage that runs, the error if one failed |
+| `GET /videos/{video_id}/video` | The video's copy for the browser. It answers Range requests |
+| `GET /videos/{video_id}/frames/{n}?w=320` | Frame `n` as a JPEG, at most `w` pixels wide |
+
+Through the UI's address the same endpoints sit under `/api/`, for example `http://localhost:3000/api/videos`.
 
 ## Ingest a video
 
@@ -173,6 +198,7 @@ The command shows a progress bar while it transcribes and ends with a summary: t
 - `audio.wav`: the audio as 16 kHz mono.
 - `frames/`: one JPEG per second, `000000.jpg` onwards.
 - `frame_vectors.npy`: one vector per frame.
+- `proxy.mp4`: the copy that the web UI plays.
 
 Finished stages are skipped on later runs. `--force` redoes them all.
 
@@ -300,7 +326,7 @@ It takes `--video VIDEO_ID`, `--limit`, `--frames`, `--mode` and `--no-plan`. To
 docker compose exec worker python -m vrag.planner "in the cooking video, when do they add the garlic?"
 ```
 
-FastAPI also serves interactive documentation of all three endpoints at `http://localhost:8000/docs`.
+FastAPI also serves interactive documentation of every endpoint at `http://localhost:8000/docs`.
 
 ## Evaluate retrieval
 
@@ -352,6 +378,8 @@ Every setting has a default, listed in `.env.example`. To change one, set it in 
 |---|---|---|
 | `API_BIND` | `127.0.0.1` | Address the API is published on. The default keeps it on the local machine |
 | `API_PORT` | `8000` | Port the API is published on |
+| `WEB_BIND` | `127.0.0.1` | Address the web UI is published on |
+| `WEB_PORT` | `3000` | Port the web UI is published on |
 | `LOG_LEVEL` | `INFO` | Log level of the project's containers |
 | `COMPOSE_FILE` | not set | `compose.yaml:compose.gpu.yaml` gives the containers that run models the NVIDIA GPU |
 
@@ -392,21 +420,29 @@ Every setting has a default, listed in `.env.example`. To change one, set it in 
 | `VLM_THINK` | `false` | `true` lets a Thinking edition, such as `qwen3-vl:8b`, reason before it answers |
 | `OLLAMA_URL` | `http://ollama:11434` | Another Ollama server, for example one on the host (`http://host.docker.internal:11434` with Docker Desktop) |
 
+**Playback**
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `PROXY_ENABLED` | `true` | `false` skips the copy for the browser. The web UI then cannot play that video |
+| `PROXY_SIZE` | `720` | The copy's shorter side in pixels, at most: 1280x720 for a landscape video, 720x1280 for a portrait one. Smaller videos keep their size |
+
 ## Services and storage
 
 | Service | Image | What it does |
 |---|---|---|
-| `api` | built from `backend/Dockerfile.api` | The HTTP API: `/health`, `/search` and `/ask`. A light image without PyTorch |
-| `worker` | built from `backend/Dockerfile.worker` | An idle container with FFmpeg, faster-whisper and PyTorch. Ingestion, evaluation and the checks run in it through `docker compose exec worker` |
+| `web` | built from `frontend/Dockerfile` | The web UI: static files behind nginx, which also passes `/api/` on to the API |
+| `api` | built from `backend/Dockerfile.api` | The HTTP API: search, answers, the video list, uploads and ingest jobs. A light image without PyTorch |
+| `worker` | built from `backend/Dockerfile.worker` | FFmpeg, faster-whisper and PyTorch. It runs the ingest jobs that the API queues, and the commands given through `docker compose exec worker` |
 | `embedder` | the `worker` image | A small internal service that embeds search queries with SigLIP 2, so the API needs no PyTorch |
 | `qdrant` | `qdrant/qdrant:v1.20.0` | The vector database |
 | `ollama` | `ollama/ollama:0.40.16` | Runs the text embedder and the model that plans searches and writes answers |
 
-Only the API publishes a port, on the local machine by default.
+Only the web UI and the API publish a port, on the local machine by default.
 
 Where things are kept:
 
-- `./data/media/` is where you put videos, `./data/artifacts/` holds what ingestion produces, and `./data/eval/` the evaluation results. `data/` is not tracked by git.
+- `./data/media/` holds the videos you put or upload there, `./data/artifacts/` what ingestion produces, `./data/jobs/` the ingest jobs, and `./data/eval/` the evaluation results. `data/` is not tracked by git.
 - The volume `qdrant_storage` holds the index, `models` the downloaded Whisper and SigLIP 2 models, and `ollama` the two models that Ollama runs.
 
 ## Run on a rented VM
@@ -417,19 +453,24 @@ The scripts in `deploy/vm/` set the stack up on a fresh Ubuntu VM, for anyone wh
 - `sync.sh USER@HOST` uploads your working copy to `/opt/vrag` on the VM and runs the bootstrap there.
 - `cloud-init.yaml` is user data for providers that accept it. It clones this repository and runs the bootstrap.
 
-The API stays on the VM's own loopback address. Reach it through an SSH tunnel, then use `localhost:8000` as above:
+The web UI and the API stay on the VM's own loopback address. Reach them through an SSH tunnel, then open `http://localhost:3000` on your own machine, or use `localhost:8000` as above:
 
 ```bash
-ssh -L 8000:localhost:8000 USER@HOST
+ssh -L 3000:localhost:3000 -L 8000:localhost:8000 USER@HOST
 ```
 
 ## Project layout
 
 ```text
 .
-├── compose.yaml            the stack: qdrant, ollama, api, worker, embedder
+├── compose.yaml            the stack: qdrant, ollama, api, worker, embedder, web
 ├── compose.gpu.yaml        gives the containers that run models the NVIDIA GPU
 ├── .env.example            every setting with its default
+├── frontend/
+│   ├── Dockerfile          builds the UI with Node, then serves it with nginx
+│   ├── nginx.conf          the static files, and /api/ passed on to the API
+│   ├── package.json        Next.js and React, at exact versions
+│   └── app/                the page, its styles, and lib/api.js for the calls to the API
 ├── backend/
 │   ├── Dockerfile.api      light image for the API
 │   ├── Dockerfile.worker   FFmpeg, faster-whisper and PyTorch; also runs the embedder
@@ -439,6 +480,7 @@ ssh -L 8000:localhost:8000 USER@HOST
 │   ├── samples/            a sample timeline.json
 │   └── vrag/
 │       ├── ingest.py       the ingest stages and their command line
+│       ├── jobs.py         ingest jobs: the queue in data/jobs/ and the worker's loop
 │       ├── media.py        ffprobe and FFmpeg calls
 │       ├── asr.py          transcription
 │       ├── vision.py       SigLIP 2 vectors for frames and queries
@@ -450,8 +492,8 @@ ssh -L 8000:localhost:8000 USER@HOST
 │       ├── evaluate.py     the retrieval evaluation
 │       ├── main.py         the API
 │       ├── config.py       settings
-│       ├── artifacts.py    artifact paths, loading and saving timelines
-│       ├── schemas/        data models: timeline, search, answer, evaluation set
+│       ├── artifacts.py    artifact paths, loading and saving timelines, the list of videos
+│       ├── schemas/        data models: timeline, search, answer, videos, jobs, evaluation set
 │       └── tools/          checks: sync_check, gpu_check, ollama_check, show_transcript, check_timeline
 └── deploy/vm/              scripts for a fresh Ubuntu VM
 ```
@@ -465,6 +507,10 @@ ssh -L 8000:localhost:8000 USER@HOST
 - **The first query is slow.** Each model loads on first use, and the model that writes answers is unloaded again after `VLM_KEEP_ALIVE`.
 - **A search finds nothing after a model was changed.** The new combination of models has an empty collection until the videos are ingested again.
 - **No GPU in the containers.** `docker compose exec worker python -m vrag.tools.gpu_check` says whether PyTorch sees one. Check that `COMPOSE_FILE` is set in `.env` and that the NVIDIA Container Toolkit is installed.
+- **The web UI says the API is unreachable.** Check that the `api` container runs: `docker compose ps`, then `curl localhost:3000/api/health`.
+- **A video stays "queued" in the web UI.** The worker runs the ingest jobs: `docker compose logs worker`.
+- **A video does not play.** It plays from `proxy.mp4`, the last stage of an ingest. The job's entry in the UI shows an error if that stage failed.
+- **The `web` image does not build.** Everything else works without it: start the rest by name with `docker compose up -d --build qdrant ollama embedder api worker`.
 
 ## Known limits
 
@@ -472,13 +518,13 @@ ssh -L 8000:localhost:8000 USER@HOST
 - Frame search reads short queries. SigLIP 2's text encoder takes 64 tokens, and a longer query is cut.
 - Frames are sampled once per second, so something visible for less than a second can be missed.
 - An answer's citations are checked against the moments it was given. The times it states in its text are not.
-- There is no authentication. Keep the API on the local machine, or put it behind something that authenticates. Qdrant and Ollama are never published.
+- There is no authentication. Keep the web UI and the API on the local machine, or put them behind something that authenticates. Qdrant and Ollama are never published.
+- An upload has no size limit, and the videos, their artifacts and the jobs are never deleted by the system.
 
 ## Roadmap
 
 Planned, roughly in this order:
 
-- A web UI: upload a video, ask, and jump to the cited moment.
 - Who speaks: speaker labels on the transcript.
 - How it is said: emotion heard in the voice.
 - What is heard: search over sounds.

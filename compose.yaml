@@ -69,11 +69,12 @@ services:
       retries: 5
       start_period: 20s
 
+  # Runs the ingest jobs that the API queues. Commands are also run in it with: docker compose exec worker ...
   worker:
     build: *worker-build
     restart: unless-stopped
     init: true
-    command: ["sleep", "infinity"]
+    command: ["python", "-m", "vrag.jobs"]
     depends_on:
       - qdrant
       - embedder
@@ -96,6 +97,8 @@ services:
       EMBED_DEVICE: ${EMBED_DEVICE:-auto}
       FUSION_TEXT_WEIGHT: ${FUSION_TEXT_WEIGHT:-1.0}
       FUSION_FRAME_WEIGHT: ${FUSION_FRAME_WEIGHT:-1.0}
+      PROXY_ENABLED: ${PROXY_ENABLED:-true}
+      PROXY_SIZE: ${PROXY_SIZE:-720}
     volumes:
       - ./data:/data
       - models:/models
@@ -118,6 +121,21 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      # Loopback by default
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-3000}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 volumes:
   qdrant_storage:

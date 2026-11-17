@@ -1,17 +1,28 @@
+import io
 import json
 import logging
+import re
 import tempfile
+from pathlib import Path
 from typing import Annotated, Literal
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi import Path as PathParam
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from PIL import Image
+from starlette.requests import ClientDisconnect
 
-from vrag import __version__, answer, index, ollama, planner
+from vrag import __version__, answer, index, jobs, ollama, planner
+from vrag.artifacts import artifact_dir, list_videos
 from vrag.config import get_settings
 from vrag.schemas.answer import AnswerResponse
+from vrag.schemas.jobs import Job
 from vrag.schemas.search import SearchResponse
 from vrag.schemas.timeline import SCHEMA_VERSION
+from vrag.schemas.videos import VideoSummary
+
+VIDEO_ID = r"^[0-9a-f]{16}$"
 
 settings = get_settings()
 logging.basicConfig(level=settings.log_level.upper())
@@ -113,3 +124,105 @@ def ask(
         return answer.collect(prepared)
     except ollama.OllamaError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/videos")
+def videos() -> list[VideoSummary]:
+    """Every ingested video, by name."""
+    current = index.collection_name()
+    return [
+        VideoSummary(
+            video_id=video.video_id,
+            source_name=video.source_name,
+            duration_s=video.duration_s,
+            indexed=video.collection == current,
+            playable=(artifact_dir(video.video_id) / "proxy.mp4").is_file(),
+        )
+        for video in list_videos()
+    ]
+
+
+def _safe_name(name: str) -> str:
+    """A file name without folders or odd characters, so that an upload can only land in the media folder."""
+    last = name.replace("\\", "/").rsplit("/", 1)[-1]
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", last).lstrip(".")[-120:] or "video"
+
+
+def _free_path(path: Path) -> Path:
+    """The path itself, or with -1, -2 and so on before its extension when that name is taken."""
+    candidate, n = path, 0
+    while candidate.exists():
+        n += 1
+        candidate = path.with_name(f"{path.stem}-{n}{path.suffix}")
+    return candidate
+
+
+@app.put("/videos")
+async def upload(request: Request, name: Annotated[str, Query(min_length=1, max_length=200)]) -> Job:
+    """Store a video and queue its ingest. The request body is the file itself; `name` is its file name.
+
+    The body is written to data/media/ as it arrives, so a large file takes no memory and no second copy.
+    """
+    media_dir = settings.data_dir / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    target = _free_path(media_dir / _safe_name(name))
+    part = target.with_name(target.name + ".part")
+    size = 0
+    try:
+        with part.open("wb") as handle:
+            async for chunk in request.stream():
+                handle.write(chunk)
+                size += len(chunk)
+    except ClientDisconnect:
+        part.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="the upload was cut off") from None
+    except OSError as exc:
+        part.unlink(missing_ok=True)
+        raise HTTPException(status_code=507, detail=f"the upload could not be stored: {exc}") from exc
+    if not size:
+        part.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="the upload is empty")
+    part.replace(target)
+    return jobs.create(target, name)
+
+
+@app.get("/jobs")
+def list_jobs() -> list[Job]:
+    """The latest ingest jobs, newest first. The worker runs them one at a time."""
+    return jobs.latest()
+
+
+@app.get("/jobs/{job_id}")
+def job(job_id: str) -> Job:
+    found = jobs.load(job_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="no such job")
+    return found
+
+
+@app.get("/videos/{video_id}/video")
+def video(video_id: Annotated[str, PathParam(pattern=VIDEO_ID)]) -> FileResponse:
+    """The copy of a video that ingest makes for browsers. A player seeks in it with Range requests."""
+    path = artifact_dir(video_id) / "proxy.mp4"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="this video has no copy for the browser")
+    return FileResponse(path, media_type="video/mp4")
+
+
+@app.get("/videos/{video_id}/frames/{frame_index}")
+def frame(
+    video_id: Annotated[str, PathParam(pattern=VIDEO_ID)],
+    frame_index: Annotated[int, PathParam(ge=0)],
+    w: Annotated[int, Query(ge=32, le=1920)] = 320,
+) -> Response:
+    """One of a video's frames as a JPEG, at most `w` pixels wide."""
+    path = artifact_dir(video_id) / "frames" / f"{frame_index:06d}.jpg"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="no such frame")
+    with Image.open(path) as image:
+        image.draft("RGB", (w, w))
+        small = image.convert("RGB")
+    small.thumbnail((w, 10 * w))
+    buffer = io.BytesIO()
+    small.save(buffer, format="JPEG", quality=80)
+    return Response(buffer.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
